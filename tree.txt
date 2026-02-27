@@ -1,0 +1,517 @@
+.
+├── ADDRESS_FORMAT.md
+├── binaries
+│   └── synergy-node
+├── control-panel
+│   ├── public
+│   └── src-tauri
+│       └── binaries
+├── dist
+│   ├── 02.png
+│   ├── assets
+│   │   ├── index-CSfcprRq.js
+│   │   └── index-Deya3V90.css
+│   ├── index.html
+│   ├── snrg.gif
+│   ├── tauri.svg
+│   └── vite.svg
+├── guides
+│   ├── COORDINATOR_GUIDE.md
+│   ├── DEVNET_GUIDE.md
+│   ├── DEVNET_STARTUP_GUIDE.md
+│   ├── NODE_DEPLOYMENT_SUMMARY.md
+│   ├── POSY_CLUSTER_TESTING_GUIDE.md
+│   ├── QUICK_REFERENCE.md
+│   ├── QUICK_START.md
+│   ├── README_BINARY.md
+│   ├── RELAYER_NODE_SETUP_GUIDE.md
+│   ├── RPC_NODE_SETUP_GUIDE.md
+│   ├── Synergy Network Address Formatting Standard.pdf
+│   ├── VALIDATOR_ONBOARDING_GUIDE.md
+│   ├── VALIDATOR_SETUP_COMPLETE.md
+│   └── validator-guide-ubuntu.md
+├── IMPLEMENTATION_SUMMARY.md
+├── index.html
+├── package.json
+├── PQC_INTEGRATION.md
+├── public
+│   ├── 02.png
+│   ├── snrg.gif
+│   ├── tauri.svg
+│   └── vite.svg
+├── README.md
+├── SETUP_WIZARD_GUIDE.md
+├── SETUP.md
+├── snrg.gif
+├── src
+│   ├── App.jsx
+│   ├── assets
+│   │   └── synergy-devnet
+│   ├── components
+│   │   ├── Dashboard.jsx
+│   │   ├── JarvisSetupWizard.jsx
+│   │   ├── JarvisWizard.jsx
+│   │   ├── Layout.jsx
+│   │   ├── LogsPage.jsx
+│   │   ├── LogsViewer.jsx
+│   │   ├── MultiNodeDashboard.jsx
+│   │   ├── NodeSetupWizard.jsx
+│   │   ├── SettingsPage.jsx
+│   │   └── SetupWizard.jsx
+│   ├── main.jsx
+│   ├── styles
+│   │   ├── animations.css
+│   │   ├── ComingSoon.css
+│   │   ├── palette.css
+│   │   ├── synergy.css
+│   │   └── typography.css
+│   └── styles.css
+├── src-tauri
+│   ├── binaries
+│   │   └── synergy-devnet-aarch64-apple-darwin
+│   ├── build.rs
+│   ├── capabilities
+│   │   ├── default.json
+│   │   └── frontend-api.json
+│   ├── Cargo.lock
+│   ├── Cargo.toml
+│   ├── gen
+│   │   └── schemas
+│   │       ├── acl-manifests.json
+│   │       ├── capabilities.json
+│   │       ├── desktop-schema.json
+│   │       └── macOS-schema.json
+│   ├── icons
+│   │   ├── 128x128.png
+│   │   ├── 128x128@2x.png
+│   │   ├── 32x32.png
+│   │   ├── 64x64.png
+│   │   ├── android
+│   │   │   ├── mipmap-anydpi-v26
+│   │   │   │   └── ic_launcher.xml
+│   │   │   ├── mipmap-hdpi
+│   │   │   │   ├── ic_launcher_foreground.png
+│   │   │   │   ├── ic_launcher_round.png
+│   │   │   │   └── ic_launcher.png
+│   │   │   ├── mipmap-mdpi
+│   │   │   │   ├── ic_launcher_foreground.png
+│   │   │   │   ├── ic_launcher_round.png
+│   │   │   │   └── ic_launcher.png
+│   │   │   ├── mipmap-xhdpi
+│   │   │   │   ├── ic_launcher_foreground.png
+│   │   │   │   ├── ic_launcher_round.png
+│   │   │   │   └── ic_launcher.png
+│   │   │   ├── mipmap-xxhdpi
+│   │   │   │   ├── ic_launcher_foreground.png
+│   │   │   │   ├── ic_launcher_round.png
+│   │   │   │   └── ic_launcher.png
+│   │   │   ├── mipmap-xxxhdpi
+│   │   │   │   ├── ic_launcher_foreground.png
+│   │   │   │   ├── ic_launcher_round.png
+│   │   │   │   └── ic_launcher.png
+│   │   │   └── values
+│   │   │       └── ic_launcher_background.xml
+│   │   ├── icon.icns
+│   │   ├── icon.ico
+│   │   ├── icon.png
+│   │   ├── ios
+│   │   │   ├── AppIcon-20x20@1x.png
+│   │   │   ├── AppIcon-20x20@2x-1.png
+│   │   │   ├── AppIcon-20x20@2x.png
+│   │   │   ├── AppIcon-20x20@3x.png
+│   │   │   ├── AppIcon-29x29@1x.png
+│   │   │   ├── AppIcon-29x29@2x-1.png
+│   │   │   ├── AppIcon-29x29@2x.png
+│   │   │   ├── AppIcon-29x29@3x.png
+│   │   │   ├── AppIcon-40x40@1x.png
+│   │   │   ├── AppIcon-40x40@2x-1.png
+│   │   │   ├── AppIcon-40x40@2x.png
+│   │   │   ├── AppIcon-40x40@3x.png
+│   │   │   ├── AppIcon-512@2x.png
+│   │   │   ├── AppIcon-60x60@2x.png
+│   │   │   ├── AppIcon-60x60@3x.png
+│   │   │   ├── AppIcon-76x76@1x.png
+│   │   │   ├── AppIcon-76x76@2x.png
+│   │   │   └── AppIcon-83.5x83.5@2x.png
+│   │   ├── Square107x107Logo.png
+│   │   ├── Square142x142Logo.png
+│   │   ├── Square150x150Logo.png
+│   │   ├── Square284x284Logo.png
+│   │   ├── Square30x30Logo.png
+│   │   ├── Square310x310Logo.png
+│   │   ├── Square44x44Logo.png
+│   │   ├── Square71x71Logo.png
+│   │   ├── Square89x89Logo.png
+│   │   └── StoreLogo.png
+│   ├── src
+│   │   ├── blockchain
+│   │   │   ├── mod.rs
+│   │   │   ├── rpc_client.rs
+│   │   │   └── service.rs
+│   │   ├── commands
+│   │   │   ├── blockchain.rs
+│   │   │   ├── init.rs
+│   │   │   ├── logs.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── node.rs
+│   │   │   ├── settings.rs
+│   │   │   └── status.rs
+│   │   ├── main.rs
+│   │   └── node_manager
+│   │       ├── actual_node_binary.rs
+│   │       ├── binary_downloader.rs
+│   │       ├── binary_verification.rs
+│   │       ├── commands.rs
+│   │       ├── config_editor.rs
+│   │       ├── config.rs
+│   │       ├── crypto.rs
+│   │       ├── init.rs
+│   │       ├── installer.rs
+│   │       ├── logs.rs
+│   │       ├── mod.rs
+│   │       ├── monitoring.rs
+│   │       ├── multi_node_process.rs
+│   │       ├── multi_node.rs
+│   │       ├── node_classes.rs
+│   │       ├── process.rs
+│   │       ├── real_node.rs
+│   │       ├── status.rs
+│   │       └── types.rs
+│   ├── synergy-address-engine
+│   │   ├── Cargo.lock
+│   │   ├── Cargo.toml
+│   │   ├── devnet_generator.rs
+│   │   ├── readme_doc.md
+│   │   ├── src
+│   │   │   ├── lib.rs
+│   │   │   └── main.rs
+│   │   └── target
+│   │       ├── debug
+│   │       │   ├── build
+│   │       │   │   ├── generic-array-060ca0eff0c6d5cf
+│   │       │   │   ├── getrandom-538b13b8c69e3638
+│   │       │   │   ├── libc-5e5f318fd5ccdad1
+│   │       │   │   ├── num-traits-04f080cc44738de7
+│   │       │   │   ├── proc-macro2-5fd1ca555fdcdba6
+│   │       │   │   ├── quote-de5c36d67000d2b4
+│   │       │   │   ├── serde_json-3a52f206acb404f1
+│   │       │   │   └── zerocopy-b09ee0b602ca22d4
+│   │       │   └── examples
+│   │       └── release
+│   │           ├── build
+│   │           │   ├── generic-array-e94a12ea39af82f6
+│   │           │   ├── getrandom-9f539185b356e92f
+│   │           │   ├── libc-8b5f92024a9b0d3b
+│   │           │   ├── libc-8ee3d2cffe26f148
+│   │           │   ├── num-traits-17e366395e4d81c3
+│   │           │   ├── proc-macro2-dfaffa2543f9d31a
+│   │           │   ├── quote-23179aef2b7953f9
+│   │           │   ├── serde_json-90ac169f86528deb
+│   │           │   └── zerocopy-fab5c10998e50b1b
+│   │           ├── examples
+│   │           └── incremental
+│   ├── synergy-node
+│   │   ├── Cargo.lock
+│   │   ├── Cargo.toml
+│   │   ├── src
+│   │   │   ├── consensus.rs
+│   │   │   ├── crypto.rs
+│   │   │   ├── main.rs
+│   │   │   ├── network.rs
+│   │   │   ├── node.rs
+│   │   │   ├── rpc.rs
+│   │   │   └── storage.rs
+│   │   └── target
+│   │       ├── CACHEDIR.TAG
+│   │       └── release
+│   │           ├── build
+│   │           │   ├── generic-array-a71a06b339bc6058
+│   │           │   ├── generic-array-e94a12ea39af82f6
+│   │           │   ├── getrandom-257f804b759dcd83
+│   │           │   ├── getrandom-e567f0385a26e202
+│   │           │   ├── libc-0089ed62c08e5a8b
+│   │           │   ├── libc-a80490c799062b28
+│   │           │   ├── parking_lot_core-c232b2ecbf8a0502
+│   │           │   ├── parking_lot_core-e229630afb6ee9d9
+│   │           │   ├── proc-macro2-03126eef501eb739
+│   │           │   ├── proc-macro2-2aa01816a4869267
+│   │           │   ├── quote-16bc777618e0423c
+│   │           │   ├── quote-a3f69852d2f8f8ed
+│   │           │   ├── serde_core-bc744add2bc0f0b5
+│   │           │   ├── serde_core-cff61d18ec0b1753
+│   │           │   ├── serde_json-90ac169f86528deb
+│   │           │   ├── serde_json-ea22c1935a643641
+│   │           │   ├── serde-47c29ec24694615d
+│   │           │   ├── serde-c267da34317c5b15
+│   │           │   ├── typenum-1b2dab60c380af2f
+│   │           │   ├── typenum-b5eb691fdb1723e9
+│   │           │   ├── zerocopy-4ec0e1f4c497fac6
+│   │           │   └── zerocopy-fab5c10998e50b1b
+│   │           ├── deps
+│   │           │   ├── aho_corasick-cf171f1308e8494a.d
+│   │           │   ├── anstream-7885c607cc32a2ab.d
+│   │           │   ├── anstyle_parse-6c91f7c80d0787bd.d
+│   │           │   ├── anstyle_query-771f1f8c4a410f3e.d
+│   │           │   ├── anstyle-abe19e6dcc8e20b0.d
+│   │           │   ├── base64-d4ac227c2a004af9.d
+│   │           │   ├── bech32-6802779af2a6ceba.d
+│   │           │   ├── block_buffer-58a905c231321089.d
+│   │           │   ├── block_buffer-84364b655de761c2.d
+│   │           │   ├── byteorder-2d7bb03ceab99f25.d
+│   │           │   ├── bytes-e382efd1964a0150.d
+│   │           │   ├── cfg_if-716c813c38a8bbb0.d
+│   │           │   ├── clap_builder-3206b7620ee8db86.d
+│   │           │   ├── clap_derive-3c8bc64e126eacd5.d
+│   │           │   ├── clap_lex-2b041b387d266e25.d
+│   │           │   ├── clap-8ad1a3240a1532be.d
+│   │           │   ├── colorchoice-d8d3c431aaf37fc0.d
+│   │           │   ├── cpufeatures-797a8336e6940093.d
+│   │           │   ├── crypto_common-e5a0ffacc19803bb.d
+│   │           │   ├── curve25519_dalek-48a30e4fbd2dad2e.d
+│   │           │   ├── digest-a1586225faabac69.d
+│   │           │   ├── digest-e27ff0475e46f835.d
+│   │           │   ├── ed25519_dalek-b30cbf4ffb6ca12c.d
+│   │           │   ├── ed25519-861ccc85347941cc.d
+│   │           │   ├── env_logger-ca54267cbee01c17.d
+│   │           │   ├── generic_array-3f031132e5337a13.d
+│   │           │   ├── getrandom-0f2d2792f3c98600.d
+│   │           │   ├── getrandom-a8375f764a8a6e26.d
+│   │           │   ├── heck-23beaad6fcffd663.d
+│   │           │   ├── humantime-527104110611df27.d
+│   │           │   ├── is_terminal_polyfill-ae0b496ccf55b6d9.d
+│   │           │   ├── is_terminal-d38ffe7c9241e727.d
+│   │           │   ├── itoa-aa164c1cdc3d854f.d
+│   │           │   ├── libaho_corasick-cf171f1308e8494a.rlib
+│   │           │   ├── libaho_corasick-cf171f1308e8494a.rmeta
+│   │           │   ├── libanstream-7885c607cc32a2ab.rlib
+│   │           │   ├── libanstream-7885c607cc32a2ab.rmeta
+│   │           │   ├── libanstyle_parse-6c91f7c80d0787bd.rlib
+│   │           │   ├── libanstyle_parse-6c91f7c80d0787bd.rmeta
+│   │           │   ├── libanstyle_query-771f1f8c4a410f3e.rlib
+│   │           │   ├── libanstyle_query-771f1f8c4a410f3e.rmeta
+│   │           │   ├── libanstyle-abe19e6dcc8e20b0.rlib
+│   │           │   ├── libanstyle-abe19e6dcc8e20b0.rmeta
+│   │           │   ├── libbase64-d4ac227c2a004af9.rlib
+│   │           │   ├── libbase64-d4ac227c2a004af9.rmeta
+│   │           │   ├── libbech32-6802779af2a6ceba.rlib
+│   │           │   ├── libbech32-6802779af2a6ceba.rmeta
+│   │           │   ├── libblock_buffer-58a905c231321089.rlib
+│   │           │   ├── libblock_buffer-58a905c231321089.rmeta
+│   │           │   ├── libblock_buffer-84364b655de761c2.rlib
+│   │           │   ├── libblock_buffer-84364b655de761c2.rmeta
+│   │           │   ├── libbyteorder-2d7bb03ceab99f25.rlib
+│   │           │   ├── libbyteorder-2d7bb03ceab99f25.rmeta
+│   │           │   ├── libbytes-e382efd1964a0150.rlib
+│   │           │   ├── libbytes-e382efd1964a0150.rmeta
+│   │           │   ├── libc-8dc02fec37ef22d8.d
+│   │           │   ├── libcfg_if-716c813c38a8bbb0.rlib
+│   │           │   ├── libcfg_if-716c813c38a8bbb0.rmeta
+│   │           │   ├── libclap_builder-3206b7620ee8db86.rlib
+│   │           │   ├── libclap_builder-3206b7620ee8db86.rmeta
+│   │           │   ├── libclap_derive-3c8bc64e126eacd5.dylib
+│   │           │   ├── libclap_lex-2b041b387d266e25.rlib
+│   │           │   ├── libclap_lex-2b041b387d266e25.rmeta
+│   │           │   ├── libclap-8ad1a3240a1532be.rlib
+│   │           │   ├── libclap-8ad1a3240a1532be.rmeta
+│   │           │   ├── libcolorchoice-d8d3c431aaf37fc0.rlib
+│   │           │   ├── libcolorchoice-d8d3c431aaf37fc0.rmeta
+│   │           │   ├── libcpufeatures-797a8336e6940093.rlib
+│   │           │   ├── libcpufeatures-797a8336e6940093.rmeta
+│   │           │   ├── libcrypto_common-e5a0ffacc19803bb.rlib
+│   │           │   ├── libcrypto_common-e5a0ffacc19803bb.rmeta
+│   │           │   ├── libcurve25519_dalek-48a30e4fbd2dad2e.rlib
+│   │           │   ├── libcurve25519_dalek-48a30e4fbd2dad2e.rmeta
+│   │           │   ├── libdigest-a1586225faabac69.rlib
+│   │           │   ├── libdigest-a1586225faabac69.rmeta
+│   │           │   ├── libdigest-e27ff0475e46f835.rlib
+│   │           │   ├── libdigest-e27ff0475e46f835.rmeta
+│   │           │   ├── libed25519_dalek-b30cbf4ffb6ca12c.rlib
+│   │           │   ├── libed25519_dalek-b30cbf4ffb6ca12c.rmeta
+│   │           │   ├── libed25519-861ccc85347941cc.rlib
+│   │           │   ├── libed25519-861ccc85347941cc.rmeta
+│   │           │   ├── libenv_logger-ca54267cbee01c17.rlib
+│   │           │   ├── libenv_logger-ca54267cbee01c17.rmeta
+│   │           │   ├── libgeneric_array-3f031132e5337a13.rlib
+│   │           │   ├── libgeneric_array-3f031132e5337a13.rmeta
+│   │           │   ├── libgetrandom-0f2d2792f3c98600.rlib
+│   │           │   ├── libgetrandom-0f2d2792f3c98600.rmeta
+│   │           │   ├── libgetrandom-a8375f764a8a6e26.rlib
+│   │           │   ├── libgetrandom-a8375f764a8a6e26.rmeta
+│   │           │   ├── libheck-23beaad6fcffd663.rlib
+│   │           │   ├── libheck-23beaad6fcffd663.rmeta
+│   │           │   ├── libhumantime-527104110611df27.rlib
+│   │           │   ├── libhumantime-527104110611df27.rmeta
+│   │           │   ├── libis_terminal_polyfill-ae0b496ccf55b6d9.rlib
+│   │           │   ├── libis_terminal_polyfill-ae0b496ccf55b6d9.rmeta
+│   │           │   ├── libis_terminal-d38ffe7c9241e727.rlib
+│   │           │   ├── libis_terminal-d38ffe7c9241e727.rmeta
+│   │           │   ├── libitoa-aa164c1cdc3d854f.rlib
+│   │           │   ├── libitoa-aa164c1cdc3d854f.rmeta
+│   │           │   ├── liblibc-8dc02fec37ef22d8.rlib
+│   │           │   ├── liblibc-8dc02fec37ef22d8.rmeta
+│   │           │   ├── liblock_api-a4ff79961d6dd923.rlib
+│   │           │   ├── liblock_api-a4ff79961d6dd923.rmeta
+│   │           │   ├── liblog-209af020c999f1d4.rlib
+│   │           │   ├── liblog-209af020c999f1d4.rmeta
+│   │           │   ├── libmemchr-50c6b9812f7ce09f.rlib
+│   │           │   ├── libmemchr-50c6b9812f7ce09f.rmeta
+│   │           │   ├── libmio-981c12c9c339ab2a.rlib
+│   │           │   ├── libmio-981c12c9c339ab2a.rmeta
+│   │           │   ├── libopaque_debug-60ce65a633502476.rlib
+│   │           │   ├── libopaque_debug-60ce65a633502476.rmeta
+│   │           │   ├── libparking_lot_core-5ea922040371ea1e.rlib
+│   │           │   ├── libparking_lot_core-5ea922040371ea1e.rmeta
+│   │           │   ├── libparking_lot-072429a7b2b83443.rlib
+│   │           │   ├── libparking_lot-072429a7b2b83443.rmeta
+│   │           │   ├── libpin_project_lite-03ca9f9aa18a118d.rlib
+│   │           │   ├── libpin_project_lite-03ca9f9aa18a118d.rmeta
+│   │           │   ├── libppv_lite86-6f3656529ee270c3.rlib
+│   │           │   ├── libppv_lite86-6f3656529ee270c3.rmeta
+│   │           │   ├── libproc_macro2-89b8bfc55b1f7319.rlib
+│   │           │   ├── libproc_macro2-89b8bfc55b1f7319.rmeta
+│   │           │   ├── libquote-b974b77886b29bec.rlib
+│   │           │   ├── libquote-b974b77886b29bec.rmeta
+│   │           │   ├── librand_chacha-10230f0c8b09dad8.rlib
+│   │           │   ├── librand_chacha-10230f0c8b09dad8.rmeta
+│   │           │   ├── librand_chacha-c69d6658900a17e6.rlib
+│   │           │   ├── librand_chacha-c69d6658900a17e6.rmeta
+│   │           │   ├── librand_core-3a1f4033f647edee.rlib
+│   │           │   ├── librand_core-3a1f4033f647edee.rmeta
+│   │           │   ├── librand_core-bc2e6139cfa28471.rlib
+│   │           │   ├── librand_core-bc2e6139cfa28471.rmeta
+│   │           │   ├── librand-62ba6fddac754cc1.rlib
+│   │           │   ├── librand-62ba6fddac754cc1.rmeta
+│   │           │   ├── librand-9f2a49f0daf7502c.rlib
+│   │           │   ├── librand-9f2a49f0daf7502c.rmeta
+│   │           │   ├── libregex_automata-db22d0ddd58d9abf.rlib
+│   │           │   ├── libregex_automata-db22d0ddd58d9abf.rmeta
+│   │           │   ├── libregex_syntax-a05b62491516fb22.rlib
+│   │           │   ├── libregex_syntax-a05b62491516fb22.rmeta
+│   │           │   ├── libregex-31cd574f6f40ca7d.rlib
+│   │           │   ├── libregex-31cd574f6f40ca7d.rmeta
+│   │           │   ├── libryu-5eb54f944eb0326f.rlib
+│   │           │   ├── libryu-5eb54f944eb0326f.rmeta
+│   │           │   ├── libscopeguard-d0e8d898a977d4e3.rlib
+│   │           │   ├── libscopeguard-d0e8d898a977d4e3.rmeta
+│   │           │   ├── libserde_core-058649b4c803fb66.rlib
+│   │           │   ├── libserde_core-058649b4c803fb66.rmeta
+│   │           │   ├── libserde_derive-361462dee66855b1.dylib
+│   │           │   ├── libserde_json-486f539711e39ca2.rlib
+│   │           │   ├── libserde_json-486f539711e39ca2.rmeta
+│   │           │   ├── libserde-0c32c985abfaec3e.rlib
+│   │           │   ├── libserde-0c32c985abfaec3e.rmeta
+│   │           │   ├── libsha2-420e3a6aac99fe73.rlib
+│   │           │   ├── libsha2-420e3a6aac99fe73.rmeta
+│   │           │   ├── libsha2-831b652072957c0e.rlib
+│   │           │   ├── libsha2-831b652072957c0e.rmeta
+│   │           │   ├── libsignal_hook_registry-26917c2cec88b9fb.rlib
+│   │           │   ├── libsignal_hook_registry-26917c2cec88b9fb.rmeta
+│   │           │   ├── libsignature-dc9704afd436ca57.rlib
+│   │           │   ├── libsignature-dc9704afd436ca57.rmeta
+│   │           │   ├── libsmallvec-cdef2fe4e77177ad.rlib
+│   │           │   ├── libsmallvec-cdef2fe4e77177ad.rmeta
+│   │           │   ├── libsocket2-1d02ae3e9d04ec00.rlib
+│   │           │   ├── libsocket2-1d02ae3e9d04ec00.rmeta
+│   │           │   ├── libstrsim-ff730605578f84f5.rlib
+│   │           │   ├── libstrsim-ff730605578f84f5.rmeta
+│   │           │   ├── libsubtle-8082f9362e42162b.rlib
+│   │           │   ├── libsubtle-8082f9362e42162b.rmeta
+│   │           │   ├── libsyn-26e9f3a0d75ff68b.rlib
+│   │           │   ├── libsyn-26e9f3a0d75ff68b.rmeta
+│   │           │   ├── libtermcolor-bbc4218e42d8f1a2.rlib
+│   │           │   ├── libtermcolor-bbc4218e42d8f1a2.rmeta
+│   │           │   ├── libtokio_macros-815ac61e05d4e9b2.dylib
+│   │           │   ├── libtokio-a283974467e5dbd5.rlib
+│   │           │   ├── libtokio-a283974467e5dbd5.rmeta
+│   │           │   ├── libtypenum-aa7da3af90134c78.rlib
+│   │           │   ├── libtypenum-aa7da3af90134c78.rmeta
+│   │           │   ├── libunicode_ident-ec2d6d677a6b2b22.rlib
+│   │           │   ├── libunicode_ident-ec2d6d677a6b2b22.rmeta
+│   │           │   ├── libutf8parse-b087037513f53ae9.rlib
+│   │           │   ├── libutf8parse-b087037513f53ae9.rmeta
+│   │           │   ├── libversion_check-32f9fffe80c68fd3.rlib
+│   │           │   ├── libversion_check-32f9fffe80c68fd3.rmeta
+│   │           │   ├── libzerocopy-c1edd21bfab21e90.rlib
+│   │           │   ├── libzerocopy-c1edd21bfab21e90.rmeta
+│   │           │   ├── libzeroize_derive-30922eecbf7f1bde.dylib
+│   │           │   ├── libzeroize-a52aad20c272ca36.rlib
+│   │           │   ├── libzeroize-a52aad20c272ca36.rmeta
+│   │           │   ├── lock_api-a4ff79961d6dd923.d
+│   │           │   ├── log-209af020c999f1d4.d
+│   │           │   ├── memchr-50c6b9812f7ce09f.d
+│   │           │   ├── mio-981c12c9c339ab2a.d
+│   │           │   ├── opaque_debug-60ce65a633502476.d
+│   │           │   ├── parking_lot_core-5ea922040371ea1e.d
+│   │           │   ├── parking_lot-072429a7b2b83443.d
+│   │           │   ├── pin_project_lite-03ca9f9aa18a118d.d
+│   │           │   ├── ppv_lite86-6f3656529ee270c3.d
+│   │           │   ├── proc_macro2-89b8bfc55b1f7319.d
+│   │           │   ├── quote-b974b77886b29bec.d
+│   │           │   ├── rand_chacha-10230f0c8b09dad8.d
+│   │           │   ├── rand_chacha-c69d6658900a17e6.d
+│   │           │   ├── rand_core-3a1f4033f647edee.d
+│   │           │   ├── rand_core-bc2e6139cfa28471.d
+│   │           │   ├── rand-62ba6fddac754cc1.d
+│   │           │   ├── rand-9f2a49f0daf7502c.d
+│   │           │   ├── regex_automata-db22d0ddd58d9abf.d
+│   │           │   ├── regex_syntax-a05b62491516fb22.d
+│   │           │   ├── regex-31cd574f6f40ca7d.d
+│   │           │   ├── ryu-5eb54f944eb0326f.d
+│   │           │   ├── scopeguard-d0e8d898a977d4e3.d
+│   │           │   ├── serde_core-058649b4c803fb66.d
+│   │           │   ├── serde_derive-361462dee66855b1.d
+│   │           │   ├── serde_json-486f539711e39ca2.d
+│   │           │   ├── serde-0c32c985abfaec3e.d
+│   │           │   ├── sha2-420e3a6aac99fe73.d
+│   │           │   ├── sha2-831b652072957c0e.d
+│   │           │   ├── signal_hook_registry-26917c2cec88b9fb.d
+│   │           │   ├── signature-dc9704afd436ca57.d
+│   │           │   ├── smallvec-cdef2fe4e77177ad.d
+│   │           │   ├── socket2-1d02ae3e9d04ec00.d
+│   │           │   ├── strsim-ff730605578f84f5.d
+│   │           │   ├── subtle-8082f9362e42162b.d
+│   │           │   ├── syn-26e9f3a0d75ff68b.d
+│   │           │   ├── synergy_node-a3a4f6fec692ade4
+│   │           │   ├── synergy_node-a3a4f6fec692ade4.d
+│   │           │   ├── termcolor-bbc4218e42d8f1a2.d
+│   │           │   ├── tokio_macros-815ac61e05d4e9b2.d
+│   │           │   ├── tokio-a283974467e5dbd5.d
+│   │           │   ├── typenum-aa7da3af90134c78.d
+│   │           │   ├── unicode_ident-ec2d6d677a6b2b22.d
+│   │           │   ├── utf8parse-b087037513f53ae9.d
+│   │           │   ├── version_check-32f9fffe80c68fd3.d
+│   │           │   ├── zerocopy-c1edd21bfab21e90.d
+│   │           │   ├── zeroize_derive-30922eecbf7f1bde.d
+│   │           │   └── zeroize-a52aad20c272ca36.d
+│   │           ├── examples
+│   │           ├── incremental
+│   │           ├── synergy-node
+│   │           └── synergy-node.d
+│   └── tauri.conf.json
+├── SYNERGY_DEVNET_PORTS_AND_PROTOCOLS.txt
+├── templates
+│   ├── ai-inference.toml
+│   ├── archive-validator.toml
+│   ├── audit-validator.toml
+│   ├── committee.toml
+│   ├── compute.toml
+│   ├── cross-chain-verifier.toml
+│   ├── data-availability.toml
+│   ├── governance-auditor.toml
+│   ├── indexer.toml
+│   ├── observer.toml
+│   ├── oracle.toml
+│   ├── pqc-crypto.toml
+│   ├── relayer.toml
+│   ├── rpc-gateway.toml
+│   ├── rpc.toml
+│   ├── security-council.toml
+│   ├── treasury-controller.toml
+│   ├── uma-coordinator.toml
+│   ├── validator.toml
+│   └── witness.toml
+├── templates.zip
+├── tree.txt
+└── vite.config.js
+
+91 directories, 424 files

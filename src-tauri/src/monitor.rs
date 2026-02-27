@@ -1,0 +1,3680 @@
+use chrono::Utc;
+use futures_util::future::join_all;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Manager};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorNode {
+    pub machine_id: String,
+    pub node_id: String,
+    pub role_group: String,
+    pub role: String,
+    pub node_type: String,
+    pub host: String,
+    pub rpc_port: u16,
+    pub p2p_port: u16,
+    pub ws_port: u16,
+    pub grpc_port: u16,
+    pub discovery_port: u16,
+    pub rpc_url: String,
+    pub node_address: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorNodeStatus {
+    pub node: MonitorNode,
+    pub status: String,
+    pub online: bool,
+    pub block_height: Option<u64>,
+    pub peer_count: Option<u64>,
+    pub syncing: Option<bool>,
+    pub response_ms: u64,
+    pub error: Option<String>,
+    pub last_checked_utc: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorSnapshot {
+    pub inventory_path: String,
+    pub captured_at_utc: String,
+    pub total_nodes: usize,
+    pub online_nodes: usize,
+    pub offline_nodes: usize,
+    pub syncing_nodes: usize,
+    pub highest_block: Option<u64>,
+    pub nodes: Vec<MonitorNodeStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MonitorRpcDiagnostics {
+    pub node_info: Option<Value>,
+    pub node_status: Option<Value>,
+    pub sync_status: Option<Value>,
+    pub latest_block: Option<Value>,
+    pub peer_info: Option<Value>,
+    pub validator_activity: Option<Value>,
+    pub relayer_set: Option<Value>,
+    pub attestations: Option<Value>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorControlCapabilities {
+    pub enabled: bool,
+    pub start_configured: bool,
+    pub stop_configured: bool,
+    pub restart_configured: bool,
+    pub status_configured: bool,
+    pub setup_configured: bool,
+    pub export_logs_configured: bool,
+    pub view_chain_data_configured: bool,
+    pub export_chain_data_configured: bool,
+    pub custom_actions: Vec<MonitorControlAction>,
+    pub configuration_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorControlAction {
+    pub key: String,
+    pub label: String,
+    pub description: String,
+    pub category: String,
+    pub configured: bool,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorAtlasLinks {
+    pub enabled: bool,
+    pub base_url: Option<String>,
+    pub home_url: Option<String>,
+    pub transactions_url: Option<String>,
+    pub wallets_url: Option<String>,
+    pub contracts_url: Option<String>,
+    pub latest_block_url: Option<String>,
+    pub latest_transaction_url: Option<String>,
+    pub latest_transaction_hash: Option<String>,
+    pub node_wallet_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorNodeDetails {
+    pub inventory_path: String,
+    pub captured_at_utc: String,
+    pub status: MonitorNodeStatus,
+    pub role_diagnostics: Value,
+    pub role_notes: Vec<String>,
+    pub role_execution: MonitorRoleExecution,
+    pub role_operations: Vec<MonitorControlAction>,
+    pub rpc: MonitorRpcDiagnostics,
+    pub atlas: MonitorAtlasLinks,
+    pub control: MonitorControlCapabilities,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorRoleExecution {
+    pub overall_status: String,
+    pub summary: String,
+    pub checks: Vec<MonitorExecutionCheck>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorExecutionCheck {
+    pub key: String,
+    pub label: String,
+    pub status: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorControlResult {
+    pub machine_id: String,
+    pub action: String,
+    pub success: bool,
+    pub exit_code: i32,
+    pub command: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub executed_at_utc: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct NodeControlCommands {
+    start: Option<String>,
+    stop: Option<String>,
+    restart: Option<String>,
+    status: Option<String>,
+    setup: Option<String>,
+    export_logs: Option<String>,
+    view_chain_data: Option<String>,
+    export_chain_data: Option<String>,
+    custom_actions: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorExportResult {
+    pub machine_id: String,
+    pub file_path: String,
+    pub bytes: usize,
+    pub exported_at_utc: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorOperatorProfile {
+    pub operator_id: String,
+    pub display_name: String,
+    pub role: String,
+    pub enabled: bool,
+    pub created_at_utc: String,
+    pub updated_at_utc: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorOperatorInput {
+    pub operator_id: String,
+    pub display_name: String,
+    pub role: String,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorSshProfile {
+    pub profile_id: String,
+    pub label: String,
+    pub ssh_user: String,
+    pub ssh_port: u16,
+    pub ssh_key_path: Option<String>,
+    pub remote_root: Option<String>,
+    pub strict_host_key_checking: Option<String>,
+    pub extra_ssh_args: Option<String>,
+    pub created_at_utc: String,
+    pub updated_at_utc: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorSshProfileInput {
+    pub profile_id: String,
+    pub label: String,
+    pub ssh_user: String,
+    pub ssh_port: Option<u16>,
+    pub ssh_key_path: Option<String>,
+    pub remote_root: Option<String>,
+    pub strict_host_key_checking: Option<String>,
+    pub extra_ssh_args: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorMachineSshBinding {
+    pub machine_id: String,
+    pub profile_id: String,
+    pub host_override: Option<String>,
+    pub remote_dir_override: Option<String>,
+    pub updated_at_utc: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorMachineSshBindingInput {
+    pub machine_id: String,
+    pub profile_id: String,
+    pub host_override: Option<String>,
+    pub remote_dir_override: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorRolePermissions {
+    pub role: String,
+    pub can_control_nodes: bool,
+    pub can_run_bulk_actions: bool,
+    pub can_manage_security: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorSecurityState {
+    pub workspace_path: String,
+    pub inventory_path: String,
+    pub active_operator_id: String,
+    pub active_role: String,
+    pub operators: Vec<MonitorOperatorProfile>,
+    pub ssh_profiles: Vec<MonitorSshProfile>,
+    pub machine_bindings: Vec<MonitorMachineSshBinding>,
+    pub role_permissions: Vec<MonitorRolePermissions>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorBulkControlResult {
+    pub scope: String,
+    pub action: String,
+    pub requested_nodes: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub executed_at_utc: String,
+    pub results: Vec<MonitorControlResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MonitorSecurityConfig {
+    version: u32,
+    active_operator_id: String,
+    operators: Vec<MonitorOperatorProfile>,
+    ssh_profiles: Vec<MonitorSshProfile>,
+    machine_bindings: Vec<MonitorMachineSshBinding>,
+}
+
+#[tauri::command]
+pub fn get_monitor_inventory_path() -> Result<String, String> {
+    resolve_inventory_path().map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn get_monitor_workspace_path() -> Result<String, String> {
+    let workspace = resolve_monitor_workspace_path()?;
+    Ok(workspace.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn monitor_initialize_workspace(app_handle: AppHandle) -> Result<String, String> {
+    let workspace = ensure_monitor_workspace(&app_handle)?;
+    Ok(workspace.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn get_monitor_security_state() -> Result<MonitorSecurityState, String> {
+    load_monitor_security_state()
+}
+
+#[tauri::command]
+pub fn monitor_set_active_operator(operator_id: String) -> Result<MonitorSecurityState, String> {
+    let mut config = load_security_config()?;
+    let requested = operator_id.trim();
+    if requested.is_empty() {
+        return Err("operator_id is required".to_string());
+    }
+
+    let exists = config
+        .operators
+        .iter()
+        .any(|operator| operator.enabled && operator.operator_id.eq_ignore_ascii_case(requested));
+    if !exists {
+        return Err(format!("Operator not found or disabled: {requested}"));
+    }
+
+    config.active_operator_id = requested.to_string();
+    save_security_config(&config)?;
+    append_audit_event(json!({
+        "event_type": "security.active_operator_changed",
+        "operator_id": requested,
+        "timestamp_utc": Utc::now().to_rfc3339(),
+    }))?;
+    load_monitor_security_state()
+}
+
+#[tauri::command]
+pub fn monitor_upsert_operator(
+    input: MonitorOperatorInput,
+) -> Result<MonitorSecurityState, String> {
+    let mut config = load_security_config()?;
+    let actor = resolve_active_operator(&config)?;
+    enforce_security_admin(&actor)?;
+
+    let operator_id = sanitize_identifier(&input.operator_id);
+    if operator_id.is_empty() {
+        return Err("operator_id is required".to_string());
+    }
+
+    let display_name = input.display_name.trim();
+    if display_name.is_empty() {
+        return Err("display_name is required".to_string());
+    }
+
+    let role = normalize_operator_role(&input.role)?;
+    let now = Utc::now().to_rfc3339();
+    let enabled = input.enabled.unwrap_or(true);
+
+    if let Some(existing) = config
+        .operators
+        .iter_mut()
+        .find(|operator| operator.operator_id.eq_ignore_ascii_case(&operator_id))
+    {
+        existing.display_name = display_name.to_string();
+        existing.role = role.clone();
+        existing.enabled = enabled;
+        existing.updated_at_utc = now.clone();
+    } else {
+        config.operators.push(MonitorOperatorProfile {
+            operator_id: operator_id.clone(),
+            display_name: display_name.to_string(),
+            role: role.clone(),
+            enabled,
+            created_at_utc: now.clone(),
+            updated_at_utc: now.clone(),
+        });
+    }
+
+    if config.active_operator_id.trim().is_empty() {
+        config.active_operator_id = operator_id.clone();
+    }
+
+    save_security_config(&config)?;
+    append_audit_event(json!({
+        "event_type": "security.operator_upserted",
+        "actor_operator_id": actor.operator_id,
+        "operator_id": operator_id,
+        "role": role,
+        "enabled": enabled,
+        "timestamp_utc": now,
+    }))?;
+    load_monitor_security_state()
+}
+
+#[tauri::command]
+pub fn monitor_delete_operator(operator_id: String) -> Result<MonitorSecurityState, String> {
+    let mut config = load_security_config()?;
+    let actor = resolve_active_operator(&config)?;
+    enforce_security_admin(&actor)?;
+
+    let target = sanitize_identifier(&operator_id);
+    if target.is_empty() {
+        return Err("operator_id is required".to_string());
+    }
+
+    let before = config.operators.len();
+    config
+        .operators
+        .retain(|operator| !operator.operator_id.eq_ignore_ascii_case(&target));
+    if config.operators.is_empty() {
+        return Err("At least one operator must remain".to_string());
+    }
+    if config.operators.len() == before {
+        return Err(format!("Operator not found: {target}"));
+    }
+
+    if config.active_operator_id.eq_ignore_ascii_case(&target) {
+        if let Some(fallback) = config.operators.iter().find(|operator| operator.enabled) {
+            config.active_operator_id = fallback.operator_id.clone();
+        }
+    }
+
+    save_security_config(&config)?;
+    append_audit_event(json!({
+        "event_type": "security.operator_deleted",
+        "actor_operator_id": actor.operator_id,
+        "operator_id": target,
+        "timestamp_utc": Utc::now().to_rfc3339(),
+    }))?;
+    load_monitor_security_state()
+}
+
+#[tauri::command]
+pub fn monitor_upsert_ssh_profile(
+    input: MonitorSshProfileInput,
+) -> Result<MonitorSecurityState, String> {
+    let mut config = load_security_config()?;
+    let actor = resolve_active_operator(&config)?;
+    enforce_security_admin(&actor)?;
+
+    let profile_id = sanitize_identifier(&input.profile_id);
+    if profile_id.is_empty() {
+        return Err("profile_id is required".to_string());
+    }
+
+    let label = input.label.trim();
+    if label.is_empty() {
+        return Err("label is required".to_string());
+    }
+
+    let ssh_user = input.ssh_user.trim();
+    if ssh_user.is_empty() {
+        return Err("ssh_user is required".to_string());
+    }
+
+    let ssh_port = input.ssh_port.unwrap_or(22);
+    let now = Utc::now().to_rfc3339();
+    let normalize_opt = |value: &Option<String>| -> Option<String> {
+        value
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+    };
+
+    if let Some(existing) = config
+        .ssh_profiles
+        .iter_mut()
+        .find(|profile| profile.profile_id.eq_ignore_ascii_case(&profile_id))
+    {
+        existing.label = label.to_string();
+        existing.ssh_user = ssh_user.to_string();
+        existing.ssh_port = ssh_port;
+        existing.ssh_key_path = normalize_opt(&input.ssh_key_path);
+        existing.remote_root = normalize_opt(&input.remote_root);
+        existing.strict_host_key_checking = normalize_opt(&input.strict_host_key_checking);
+        existing.extra_ssh_args = normalize_opt(&input.extra_ssh_args);
+        existing.updated_at_utc = now.clone();
+    } else {
+        config.ssh_profiles.push(MonitorSshProfile {
+            profile_id: profile_id.clone(),
+            label: label.to_string(),
+            ssh_user: ssh_user.to_string(),
+            ssh_port,
+            ssh_key_path: normalize_opt(&input.ssh_key_path),
+            remote_root: normalize_opt(&input.remote_root),
+            strict_host_key_checking: normalize_opt(&input.strict_host_key_checking),
+            extra_ssh_args: normalize_opt(&input.extra_ssh_args),
+            created_at_utc: now.clone(),
+            updated_at_utc: now.clone(),
+        });
+    }
+
+    save_security_config(&config)?;
+    append_audit_event(json!({
+        "event_type": "security.ssh_profile_upserted",
+        "actor_operator_id": actor.operator_id,
+        "profile_id": profile_id,
+        "timestamp_utc": now,
+    }))?;
+    load_monitor_security_state()
+}
+
+#[tauri::command]
+pub fn monitor_delete_ssh_profile(profile_id: String) -> Result<MonitorSecurityState, String> {
+    let mut config = load_security_config()?;
+    let actor = resolve_active_operator(&config)?;
+    enforce_security_admin(&actor)?;
+
+    let target = sanitize_identifier(&profile_id);
+    if target.is_empty() {
+        return Err("profile_id is required".to_string());
+    }
+
+    let before_profiles = config.ssh_profiles.len();
+    config
+        .ssh_profiles
+        .retain(|profile| !profile.profile_id.eq_ignore_ascii_case(&target));
+    if config.ssh_profiles.len() == before_profiles {
+        return Err(format!("SSH profile not found: {target}"));
+    }
+    config
+        .machine_bindings
+        .retain(|binding| !binding.profile_id.eq_ignore_ascii_case(&target));
+
+    save_security_config(&config)?;
+    append_audit_event(json!({
+        "event_type": "security.ssh_profile_deleted",
+        "actor_operator_id": actor.operator_id,
+        "profile_id": target,
+        "timestamp_utc": Utc::now().to_rfc3339(),
+    }))?;
+    load_monitor_security_state()
+}
+
+#[tauri::command]
+pub fn monitor_assign_machine_ssh_profile(
+    input: MonitorMachineSshBindingInput,
+) -> Result<MonitorSecurityState, String> {
+    let mut config = load_security_config()?;
+    let actor = resolve_active_operator(&config)?;
+    enforce_security_admin(&actor)?;
+
+    let machine_id = input.machine_id.trim().to_string();
+    if machine_id.is_empty() {
+        return Err("machine_id is required".to_string());
+    }
+    let profile_id = sanitize_identifier(&input.profile_id);
+    if profile_id.is_empty() {
+        return Err("profile_id is required".to_string());
+    }
+
+    let profile_exists = config
+        .ssh_profiles
+        .iter()
+        .any(|profile| profile.profile_id.eq_ignore_ascii_case(&profile_id));
+    if !profile_exists {
+        return Err(format!("SSH profile not found: {profile_id}"));
+    }
+
+    let normalized_opt = |value: &Option<String>| -> Option<String> {
+        value
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+    };
+    let now = Utc::now().to_rfc3339();
+
+    if let Some(existing) = config
+        .machine_bindings
+        .iter_mut()
+        .find(|binding| binding.machine_id.eq_ignore_ascii_case(&machine_id))
+    {
+        existing.profile_id = profile_id.clone();
+        existing.host_override = normalized_opt(&input.host_override);
+        existing.remote_dir_override = normalized_opt(&input.remote_dir_override);
+        existing.updated_at_utc = now.clone();
+    } else {
+        config.machine_bindings.push(MonitorMachineSshBinding {
+            machine_id: machine_id.clone(),
+            profile_id: profile_id.clone(),
+            host_override: normalized_opt(&input.host_override),
+            remote_dir_override: normalized_opt(&input.remote_dir_override),
+            updated_at_utc: now.clone(),
+        });
+    }
+
+    save_security_config(&config)?;
+    append_audit_event(json!({
+        "event_type": "security.machine_ssh_binding_upserted",
+        "actor_operator_id": actor.operator_id,
+        "machine_id": machine_id,
+        "profile_id": profile_id,
+        "timestamp_utc": now,
+    }))?;
+    load_monitor_security_state()
+}
+
+#[tauri::command]
+pub fn monitor_remove_machine_ssh_profile(
+    machine_id: String,
+) -> Result<MonitorSecurityState, String> {
+    let mut config = load_security_config()?;
+    let actor = resolve_active_operator(&config)?;
+    enforce_security_admin(&actor)?;
+
+    let target = machine_id.trim();
+    if target.is_empty() {
+        return Err("machine_id is required".to_string());
+    }
+
+    let before = config.machine_bindings.len();
+    config
+        .machine_bindings
+        .retain(|binding| !binding.machine_id.eq_ignore_ascii_case(target));
+    if config.machine_bindings.len() == before {
+        return Err(format!("No SSH binding found for machine: {target}"));
+    }
+
+    save_security_config(&config)?;
+    append_audit_event(json!({
+        "event_type": "security.machine_ssh_binding_removed",
+        "actor_operator_id": actor.operator_id,
+        "machine_id": target,
+        "timestamp_utc": Utc::now().to_rfc3339(),
+    }))?;
+    load_monitor_security_state()
+}
+
+#[tauri::command]
+pub async fn get_monitor_snapshot() -> Result<MonitorSnapshot, String> {
+    let inventory_path = resolve_inventory_path()?;
+    let nodes = load_inventory_nodes(&inventory_path)?;
+
+    let probes = nodes.into_iter().map(probe_node).collect::<Vec<_>>();
+    let mut statuses = join_all(probes).await;
+    statuses.sort_by(|a, b| a.node.machine_id.cmp(&b.node.machine_id));
+
+    let total_nodes = statuses.len();
+    let online_nodes = statuses.iter().filter(|n| n.online).count();
+    let offline_nodes = total_nodes.saturating_sub(online_nodes);
+    let syncing_nodes = statuses.iter().filter(|n| n.syncing == Some(true)).count();
+    let highest_block = statuses.iter().filter_map(|n| n.block_height).max();
+
+    Ok(MonitorSnapshot {
+        inventory_path: inventory_path.to_string_lossy().to_string(),
+        captured_at_utc: Utc::now().to_rfc3339(),
+        total_nodes,
+        online_nodes,
+        offline_nodes,
+        syncing_nodes,
+        highest_block,
+        nodes: statuses,
+    })
+}
+
+#[tauri::command]
+pub async fn monitor_bulk_node_control(
+    action: String,
+    scope: Option<String>,
+) -> Result<MonitorBulkControlResult, String> {
+    let normalized_action = normalize_action_key(&action);
+    if normalized_action.is_empty() {
+        return Err("Control action is empty".to_string());
+    }
+
+    let inventory_path = resolve_inventory_path()?;
+    let nodes = load_inventory_nodes(&inventory_path)?;
+    let scope_value = scope.unwrap_or_else(|| "all".to_string());
+    let selected = select_nodes_for_scope(&nodes, &scope_value);
+    if selected.is_empty() {
+        return Err(format!("No nodes match scope '{scope_value}'"));
+    }
+
+    let config = load_security_config()?;
+    let operator = resolve_active_operator(&config)?;
+    if !role_allows_control(&operator.role, &normalized_action) {
+        append_audit_event(json!({
+            "event_type": "control.bulk.denied",
+            "operator_id": operator.operator_id,
+            "operator_role": operator.role,
+            "scope": scope_value,
+            "action": normalized_action,
+            "timestamp_utc": Utc::now().to_rfc3339(),
+        }))?;
+        return Err(format!(
+            "RBAC denied: role '{}' cannot execute action '{}'",
+            operator.role, normalized_action
+        ));
+    }
+
+    let mut results = Vec::new();
+    for machine_id in selected {
+        let result =
+            execute_monitor_node_control(&machine_id, &normalized_action, &operator, "bulk")
+                .await?;
+        results.push(result);
+    }
+
+    let succeeded = results.iter().filter(|result| result.success).count();
+    let failed = results.len().saturating_sub(succeeded);
+    append_audit_event(json!({
+        "event_type": "control.bulk.completed",
+        "operator_id": operator.operator_id,
+        "operator_role": operator.role,
+        "scope": scope_value,
+        "action": normalized_action,
+        "requested_nodes": results.len(),
+        "succeeded": succeeded,
+        "failed": failed,
+        "timestamp_utc": Utc::now().to_rfc3339(),
+    }))?;
+
+    Ok(MonitorBulkControlResult {
+        scope: scope_value,
+        action: normalized_action,
+        requested_nodes: results.len(),
+        succeeded,
+        failed,
+        executed_at_utc: Utc::now().to_rfc3339(),
+        results,
+    })
+}
+
+#[tauri::command]
+pub async fn get_monitor_node_details(machine_id: String) -> Result<MonitorNodeDetails, String> {
+    let inventory_path = resolve_inventory_path()?;
+    let nodes = load_inventory_nodes(&inventory_path)?;
+
+    let node = nodes
+        .iter()
+        .find(|candidate| {
+            candidate.machine_id.eq_ignore_ascii_case(&machine_id)
+                || candidate.node_id.eq_ignore_ascii_case(&machine_id)
+        })
+        .cloned()
+        .ok_or_else(|| format!("Node not found in inventory: {machine_id}"))?;
+
+    let node_status = probe_node(node.clone()).await;
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(2))
+        .connect_timeout(Duration::from_secs(2))
+        .build()
+        .unwrap_or_else(|_| Client::new());
+
+    let rpc_url = node.rpc_url.clone();
+    let (
+        node_info_result,
+        node_status_result,
+        sync_status_result,
+        latest_block_result,
+        peer_info_result,
+        validator_activity_result,
+        relayer_set_result,
+        attestations_result,
+    ) = tokio::join!(
+        rpc_call(&client, &rpc_url, "synergy_nodeInfo", json!([])),
+        rpc_call(&client, &rpc_url, "synergy_getNodeStatus", json!([])),
+        rpc_call(&client, &rpc_url, "synergy_getSyncStatus", json!([])),
+        rpc_call(&client, &rpc_url, "synergy_getLatestBlock", json!([])),
+        rpc_call(&client, &rpc_url, "synergy_getPeerInfo", json!([])),
+        rpc_call(&client, &rpc_url, "synergy_getValidatorActivity", json!([])),
+        rpc_call(&client, &rpc_url, "synergy_getRelayerSet", json!([])),
+        rpc_call(
+            &client,
+            &rpc_url,
+            "synergy_getAttestations",
+            json!([25_u64])
+        ),
+    );
+
+    let mut rpc = MonitorRpcDiagnostics::default();
+    rpc.node_info = node_info_result.clone().ok();
+    rpc.node_status = node_status_result.clone().ok();
+    rpc.sync_status = sync_status_result.clone().ok();
+    rpc.latest_block = latest_block_result.clone().ok();
+    rpc.peer_info = peer_info_result.clone().ok();
+    rpc.validator_activity = validator_activity_result.clone().ok();
+    rpc.relayer_set = relayer_set_result.clone().ok();
+    rpc.attestations = attestations_result.clone().ok();
+
+    if let Err(err) = node_info_result.as_ref() {
+        rpc.errors.push(format!("synergy_nodeInfo: {err}"));
+    }
+    if let Err(err) = node_status_result.as_ref() {
+        rpc.errors.push(format!("synergy_getNodeStatus: {err}"));
+    }
+    if let Err(err) = sync_status_result.as_ref() {
+        rpc.errors.push(format!("synergy_getSyncStatus: {err}"));
+    }
+    if let Err(err) = latest_block_result.as_ref() {
+        rpc.errors.push(format!("synergy_getLatestBlock: {err}"));
+    }
+    if let Err(err) = peer_info_result.as_ref() {
+        rpc.errors.push(format!("synergy_getPeerInfo: {err}"));
+    }
+    if let Err(err) = validator_activity_result.as_ref() {
+        rpc.errors
+            .push(format!("synergy_getValidatorActivity: {err}"));
+    }
+    if let Err(err) = relayer_set_result.as_ref() {
+        rpc.errors.push(format!("synergy_getRelayerSet: {err}"));
+    }
+    if let Err(err) = attestations_result.as_ref() {
+        rpc.errors.push(format!("synergy_getAttestations: {err}"));
+    }
+
+    let (role_diagnostics, role_notes) = build_role_diagnostics(&node_status, &rpc);
+    let role_execution = build_role_execution(&node_status, &rpc);
+
+    let host_overrides = load_hosts_overrides(&inventory_path);
+    let control_commands = resolve_control_commands(
+        &host_overrides,
+        &node.machine_id,
+        &node.node_id,
+        &inventory_path,
+    );
+    let role_operations = build_role_operations(&node_status, &control_commands);
+    let atlas = build_atlas_links(&host_overrides, &node_status, &rpc);
+    let control = build_control_capabilities(&control_commands);
+
+    Ok(MonitorNodeDetails {
+        inventory_path: inventory_path.to_string_lossy().to_string(),
+        captured_at_utc: Utc::now().to_rfc3339(),
+        status: node_status,
+        role_diagnostics,
+        role_notes,
+        role_execution,
+        role_operations,
+        rpc,
+        atlas,
+        control,
+    })
+}
+
+#[tauri::command]
+pub async fn monitor_node_control(
+    machine_id: String,
+    action: String,
+) -> Result<MonitorControlResult, String> {
+    let normalized_action = normalize_action_key(&action);
+    if normalized_action.is_empty() {
+        return Err("Control action is empty".to_string());
+    }
+
+    let config = load_security_config()?;
+    let operator = resolve_active_operator(&config)?;
+    if !role_allows_control(&operator.role, &normalized_action) {
+        append_audit_event(json!({
+            "event_type": "control.single.denied",
+            "operator_id": operator.operator_id,
+            "operator_role": operator.role,
+            "machine_id": machine_id,
+            "action": normalized_action,
+            "timestamp_utc": Utc::now().to_rfc3339(),
+        }))?;
+        return Err(format!(
+            "RBAC denied: role '{}' cannot execute action '{}'",
+            operator.role, normalized_action
+        ));
+    }
+
+    execute_monitor_node_control(&machine_id, &normalized_action, &operator, "single").await
+}
+
+#[tauri::command]
+pub async fn monitor_export_node_data(machine_id: String) -> Result<MonitorExportResult, String> {
+    let details = get_monitor_node_details(machine_id.clone()).await?;
+    let exported_at_utc = Utc::now().to_rfc3339();
+
+    let inventory_path = PathBuf::from(&details.inventory_path);
+    let export_root = inventory_path
+        .parent()
+        .map(|parent| parent.join("reports").join("node-monitor-exports"))
+        .unwrap_or_else(|| PathBuf::from("reports/node-monitor-exports"));
+    fs::create_dir_all(&export_root).map_err(|e| {
+        format!(
+            "Failed to create export directory {}: {}",
+            export_root.display(),
+            e
+        )
+    })?;
+
+    let file_stem = format!(
+        "{}-node-snapshot-{}",
+        sanitize_filename_fragment(&details.status.node.machine_id),
+        Utc::now().format("%Y%m%dT%H%M%SZ")
+    );
+    let output_path = export_root.join(format!("{file_stem}.json"));
+
+    let payload = json!({
+        "exported_at_utc": exported_at_utc,
+        "machine_id": details.status.node.machine_id,
+        "node_id": details.status.node.node_id,
+        "inventory_path": details.inventory_path,
+        "details": details,
+    });
+
+    let encoded = serde_json::to_vec_pretty(&payload).map_err(|e| {
+        format!(
+            "Failed to serialize node export payload for {}: {}",
+            machine_id, e
+        )
+    })?;
+    fs::write(&output_path, &encoded).map_err(|e| {
+        format!(
+            "Failed to write node export file {}: {}",
+            output_path.display(),
+            e
+        )
+    })?;
+
+    Ok(MonitorExportResult {
+        machine_id: details.status.node.machine_id,
+        file_path: output_path.to_string_lossy().to_string(),
+        bytes: encoded.len(),
+        exported_at_utc,
+    })
+}
+
+fn resolve_inventory_path() -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var("SYNERGY_MONITOR_INVENTORY") {
+        let candidate = PathBuf::from(path);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    if let Ok(workspace) = resolve_monitor_workspace_path() {
+        let workspace_inventory = workspace.join("devnet/lean15/node-inventory.csv");
+        if workspace_inventory.is_file() {
+            return Ok(workspace_inventory);
+        }
+    }
+
+    let mut candidates = Vec::new();
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.extend(discovery_candidates_from_base(&current_dir));
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.extend(discovery_candidates_from_base(exe_dir));
+            candidates.push(exe_dir.join("../Resources/devnet/lean15/node-inventory.csv"));
+            candidates
+                .push(exe_dir.join("../Resources/_up_/_up_/_up_/devnet/lean15/node-inventory.csv"));
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            "Unable to resolve node-inventory.csv. Set SYNERGY_MONITOR_INVENTORY to an absolute path to your inventory file.".to_string()
+        })
+}
+
+fn discovery_candidates_from_base(base: &Path) -> Vec<PathBuf> {
+    let mut output = Vec::new();
+    output.push(base.join("devnet/lean15/node-inventory.csv"));
+    output.push(base.join("node-inventory.csv"));
+
+    for ancestor in base.ancestors().take(10) {
+        output.push(ancestor.join("devnet/lean15/node-inventory.csv"));
+    }
+
+    output
+}
+
+fn load_inventory_nodes(inventory_path: &Path) -> Result<Vec<MonitorNode>, String> {
+    let content = fs::read_to_string(inventory_path).map_err(|e| {
+        format!(
+            "Failed to read inventory file {}: {}",
+            inventory_path.display(),
+            e
+        )
+    })?;
+
+    let mut lines = content.lines().filter(|line| !line.trim().is_empty());
+    let header = lines
+        .next()
+        .ok_or_else(|| "Inventory file is empty".to_string())?;
+    let header_cols = header
+        .split(',')
+        .map(|cell| cell.trim().trim_start_matches('\u{feff}').to_string())
+        .collect::<Vec<_>>();
+    let index_map = header_cols
+        .iter()
+        .enumerate()
+        .map(|(idx, name)| (name.clone(), idx))
+        .collect::<HashMap<_, _>>();
+
+    let hosts_overrides = load_hosts_overrides(inventory_path);
+    let node_addresses = load_node_address_map(inventory_path);
+
+    let required = [
+        "machine_id",
+        "node_id",
+        "role_group",
+        "role",
+        "node_type",
+        "p2p_port",
+        "rpc_port",
+        "ws_port",
+        "grpc_port",
+        "discovery_port",
+        "host",
+    ];
+
+    for name in required {
+        if !index_map.contains_key(name) {
+            return Err(format!("Inventory header missing required column '{name}'"));
+        }
+    }
+
+    let mut nodes = Vec::new();
+
+    for (line_number, line) in lines.enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+
+        let cells = trimmed
+            .split(',')
+            .map(|cell| cell.trim().to_string())
+            .collect::<Vec<_>>();
+        if cells.len() < header_cols.len() {
+            continue;
+        }
+
+        let get = |name: &str| -> Result<String, String> {
+            let idx = *index_map
+                .get(name)
+                .ok_or_else(|| format!("Missing column '{name}'"))?;
+            Ok(cells.get(idx).cloned().unwrap_or_default())
+        };
+
+        let machine_id = get("machine_id")?;
+        let node_id = get("node_id")?;
+        let host_from_inventory = get("host")?;
+        let host = resolve_host_override(
+            &hosts_overrides,
+            &machine_id,
+            &node_id,
+            host_from_inventory.clone(),
+        );
+
+        let parse_port = |value: String, label: &str| -> Result<u16, String> {
+            value.parse::<u16>().map_err(|_| {
+                format!(
+                    "Invalid {label} value '{value}' in inventory at line {}",
+                    line_number + 2
+                )
+            })
+        };
+
+        let rpc_port = parse_port(get("rpc_port")?, "rpc_port")?;
+        let p2p_port = parse_port(get("p2p_port")?, "p2p_port")?;
+        let ws_port = parse_port(get("ws_port")?, "ws_port")?;
+        let grpc_port = parse_port(get("grpc_port")?, "grpc_port")?;
+        let discovery_port = parse_port(get("discovery_port")?, "discovery_port")?;
+
+        let rpc_url = build_rpc_url(&host, rpc_port);
+
+        nodes.push(MonitorNode {
+            node_address: node_addresses.get(&machine_id.to_lowercase()).cloned(),
+            machine_id,
+            node_id,
+            role_group: get("role_group")?,
+            role: get("role")?,
+            node_type: get("node_type")?,
+            host,
+            rpc_port,
+            p2p_port,
+            ws_port,
+            grpc_port,
+            discovery_port,
+            rpc_url,
+        });
+    }
+
+    if nodes.is_empty() {
+        return Err("No nodes were loaded from inventory".to_string());
+    }
+
+    Ok(nodes)
+}
+
+fn load_hosts_overrides(inventory_path: &Path) -> HashMap<String, String> {
+    let mut output = HashMap::new();
+    let Some(parent) = inventory_path.parent() else {
+        return output;
+    };
+
+    let hosts_file = parent.join("hosts.env");
+    if !hosts_file.is_file() {
+        return output;
+    }
+
+    let Ok(content) = fs::read_to_string(&hosts_file) else {
+        return output;
+    };
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let stripped = line.strip_prefix("export ").unwrap_or(line).trim();
+        let Some((raw_key, raw_value)) = stripped.split_once('=') else {
+            continue;
+        };
+
+        let key = raw_key.trim().to_lowercase();
+        let value = raw_value
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_string();
+
+        if !key.is_empty() && !value.is_empty() {
+            output.insert(key, value);
+        }
+    }
+
+    output
+}
+
+fn load_node_address_map(inventory_path: &Path) -> HashMap<String, String> {
+    let mut output = HashMap::new();
+    let Some(lean15_dir) = inventory_path.parent() else {
+        return output;
+    };
+
+    let key_file = lean15_dir.join("keys/node-addresses.csv");
+    if !key_file.is_file() {
+        return output;
+    }
+
+    let Ok(content) = fs::read_to_string(&key_file) else {
+        return output;
+    };
+
+    for line in content.lines().skip(1) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let cells = trimmed
+            .split(',')
+            .map(|value| value.trim().to_string())
+            .collect::<Vec<_>>();
+        if cells.len() < 6 {
+            continue;
+        }
+
+        let machine_id = cells[0].to_lowercase();
+        let address = cells[5].to_string();
+        if !machine_id.is_empty() && !address.is_empty() {
+            output.insert(machine_id, address);
+        }
+    }
+
+    output
+}
+
+fn resolve_host_override(
+    overrides: &HashMap<String, String>,
+    machine_id: &str,
+    node_id: &str,
+    fallback: String,
+) -> String {
+    let machine = machine_id.to_lowercase();
+    let node = node_id.to_lowercase();
+    let machine_snake = machine.replace('-', "_");
+    let node_snake = node.replace('-', "_");
+    let fallback_key = fallback.to_lowercase();
+
+    let candidate_keys = [
+        machine.clone(),
+        machine_snake.clone(),
+        format!("{}_host", machine_snake),
+        node.clone(),
+        node_snake.clone(),
+        format!("{}_host", node_snake),
+        fallback_key,
+    ];
+
+    for key in candidate_keys {
+        if let Some(value) = overrides.get(&key) {
+            return value.clone();
+        }
+    }
+
+    fallback
+}
+
+fn build_rpc_url(host: &str, rpc_port: u16) -> String {
+    let trimmed = host.trim().trim_end_matches('/');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        if has_explicit_port(trimmed) {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed}:{rpc_port}")
+        }
+    } else {
+        format!("http://{trimmed}:{rpc_port}")
+    }
+}
+
+fn has_explicit_port(host: &str) -> bool {
+    let without_scheme = host.split("://").nth(1).unwrap_or(host);
+    let authority = without_scheme
+        .split('/')
+        .next()
+        .unwrap_or(without_scheme)
+        .trim();
+
+    if authority.starts_with('[') {
+        authority.contains("]:")
+    } else if let Some((_, port)) = authority.rsplit_once(':') {
+        !port.is_empty() && port.chars().all(|c| c.is_ascii_digit())
+    } else {
+        false
+    }
+}
+
+async fn probe_node(node: MonitorNode) -> MonitorNodeStatus {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(2))
+        .connect_timeout(Duration::from_secs(2))
+        .build()
+        .unwrap_or_else(|_| Client::new());
+
+    let started = Instant::now();
+    let rpc_url = node.rpc_url.clone();
+
+    let (node_info_result, block_result_primary, block_result_alt, peer_result, sync_result) = tokio::join!(
+        rpc_call(&client, &rpc_url, "synergy_nodeInfo", json!([])),
+        rpc_call(&client, &rpc_url, "synergy_getBlockNumber", json!([])),
+        rpc_call(&client, &rpc_url, "synergy_blockNumber", json!([])),
+        rpc_call(&client, &rpc_url, "synergy_getPeerInfo", json!([])),
+        rpc_call(&client, &rpc_url, "synergy_getSyncStatus", json!([])),
+    );
+
+    let node_info = node_info_result.as_ref().ok();
+    let block_height = block_result_primary
+        .as_ref()
+        .ok()
+        .and_then(parse_block_height)
+        .or_else(|| block_result_alt.as_ref().ok().and_then(parse_block_height))
+        .or_else(|| node_info.and_then(parse_block_height));
+
+    let peer_count = extract_peer_count(node_info).or_else(|| {
+        peer_result
+            .as_ref()
+            .ok()
+            .and_then(|value| extract_peer_count(Some(value)))
+    });
+
+    let syncing = extract_syncing(node_info).or_else(|| {
+        sync_result
+            .as_ref()
+            .ok()
+            .and_then(|value| extract_syncing(Some(value)))
+            .or_else(|| sync_result.as_ref().ok().and_then(|value| value.as_bool()))
+    });
+
+    let mut errors = Vec::new();
+    if let Err(err) = &node_info_result {
+        errors.push(format!("nodeInfo: {err}"));
+    }
+    if let Err(err) = &block_result_primary {
+        errors.push(format!("getBlockNumber: {err}"));
+    }
+    if let Err(err) = &peer_result {
+        errors.push(format!("getPeerInfo: {err}"));
+    }
+    if let Err(err) = &sync_result {
+        errors.push(format!("getSyncStatus: {err}"));
+    }
+
+    let online = node_info.is_some()
+        || block_height.is_some()
+        || peer_count.is_some()
+        || sync_result.is_ok()
+        || block_result_alt.is_ok();
+
+    let status = if !online {
+        "offline".to_string()
+    } else if syncing == Some(true) {
+        "syncing".to_string()
+    } else {
+        "online".to_string()
+    };
+
+    MonitorNodeStatus {
+        node,
+        status,
+        online,
+        block_height,
+        peer_count,
+        syncing,
+        response_ms: started.elapsed().as_millis() as u64,
+        error: if online || errors.is_empty() {
+            None
+        } else {
+            Some(errors.join(" | "))
+        },
+        last_checked_utc: Utc::now().to_rfc3339(),
+    }
+}
+
+async fn rpc_call(
+    client: &Client,
+    rpc_url: &str,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": params
+    });
+
+    let response = client
+        .post(rpc_url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status().as_u16()));
+    }
+
+    let json_response = response.json::<Value>().await.map_err(|e| e.to_string())?;
+    if let Some(err) = json_response.get("error") {
+        return Err(err.to_string());
+    }
+
+    json_response
+        .get("result")
+        .cloned()
+        .ok_or_else(|| "Missing result field".to_string())
+}
+
+fn parse_block_height(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number.as_u64(),
+        Value::String(raw) => parse_u64(raw),
+        Value::Object(map) => {
+            let keys = [
+                "block_height",
+                "height",
+                "latest_block",
+                "current_block_height",
+                "current_height",
+                "blockNumber",
+            ];
+            keys.iter()
+                .find_map(|key| map.get(*key))
+                .and_then(parse_block_height)
+        }
+        _ => None,
+    }
+}
+
+fn extract_peer_count(value: Option<&Value>) -> Option<u64> {
+    let value = value?;
+    match value {
+        Value::Array(items) => Some(items.len() as u64),
+        Value::Number(number) => number.as_u64(),
+        Value::String(raw) => parse_u64(raw),
+        Value::Object(map) => {
+            let keys = [
+                "peer_count",
+                "peers",
+                "total_peers",
+                "count",
+                "network_peers",
+            ];
+            keys.iter()
+                .find_map(|key| map.get(*key))
+                .and_then(|candidate| {
+                    if let Some(array) = candidate.as_array() {
+                        Some(array.len() as u64)
+                    } else {
+                        extract_peer_count(Some(candidate))
+                    }
+                })
+        }
+        _ => None,
+    }
+}
+
+fn extract_syncing(value: Option<&Value>) -> Option<bool> {
+    let value = value?;
+    match value {
+        Value::Bool(flag) => Some(*flag),
+        Value::String(raw) => {
+            let normalized = raw.trim().to_lowercase();
+            match normalized.as_str() {
+                "true" | "syncing" => Some(true),
+                "false" | "synced" | "idle" => Some(false),
+                _ => None,
+            }
+        }
+        Value::Object(map) => {
+            let keys = [
+                "syncing",
+                "is_syncing",
+                "synced",
+                "is_synced",
+                "sync_status",
+            ];
+            for key in keys {
+                if let Some(candidate) = map.get(key) {
+                    if key == "synced" || key == "is_synced" {
+                        if let Some(flag) = extract_syncing(Some(candidate)) {
+                            return Some(!flag);
+                        }
+                    } else if let Some(flag) = extract_syncing(Some(candidate)) {
+                        return Some(flag);
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn parse_u64(raw: &str) -> Option<u64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return u64::from_str_radix(hex, 16).ok();
+    }
+
+    trimmed.parse::<u64>().ok()
+}
+
+fn current_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn parse_value_as_u64(value: Option<&Value>) -> Option<u64> {
+    match value {
+        Some(Value::Number(number)) => number.as_u64(),
+        Some(Value::String(raw)) => parse_u64(raw),
+        _ => None,
+    }
+}
+
+fn parse_value_as_bool(value: Option<&Value>) -> Option<bool> {
+    match value {
+        Some(Value::Bool(flag)) => Some(*flag),
+        Some(Value::String(raw)) => {
+            let normalized = raw.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "true" | "yes" | "on" | "1" => Some(true),
+                "false" | "no" | "off" | "0" => Some(false),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn add_execution_check(
+    checks: &mut Vec<MonitorExecutionCheck>,
+    key: &str,
+    label: &str,
+    status: &str,
+    detail: impl Into<String>,
+) {
+    checks.push(MonitorExecutionCheck {
+        key: key.to_string(),
+        label: label.to_string(),
+        status: status.to_string(),
+        detail: detail.into(),
+    });
+}
+
+fn summarize_execution(checks: &[MonitorExecutionCheck]) -> MonitorRoleExecution {
+    let fail_count = checks.iter().filter(|check| check.status == "fail").count();
+    let warn_count = checks.iter().filter(|check| check.status == "warn").count();
+    let pass_count = checks.iter().filter(|check| check.status == "pass").count();
+
+    let overall_status = if fail_count > 0 {
+        "critical"
+    } else if warn_count > 0 {
+        "degraded"
+    } else if pass_count > 0 {
+        "healthy"
+    } else {
+        "unknown"
+    };
+
+    let summary = format!(
+        "{} checks passed, {} warning(s), {} failure(s).",
+        pass_count, warn_count, fail_count
+    );
+
+    MonitorRoleExecution {
+        overall_status: overall_status.to_string(),
+        summary,
+        checks: checks.to_vec(),
+    }
+}
+
+fn find_local_relayer_entry<'a>(
+    rpc: &'a MonitorRpcDiagnostics,
+    address: &str,
+) -> Option<&'a Value> {
+    if address.is_empty() {
+        return None;
+    }
+
+    rpc.relayer_set
+        .as_ref()
+        .and_then(|value| value.get("relayers"))
+        .and_then(|value| value.as_array())
+        .and_then(|items| {
+            items.iter().find(|candidate| {
+                candidate
+                    .get("address")
+                    .and_then(|value| value.as_str())
+                    .map(|candidate_address| candidate_address.eq_ignore_ascii_case(address))
+                    .unwrap_or(false)
+            })
+        })
+}
+
+fn normalize_identifier(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+fn identifier_matches(candidate: &str, expected: &str) -> bool {
+    if candidate.eq_ignore_ascii_case(expected) {
+        return true;
+    }
+
+    let normalized_candidate = normalize_identifier(candidate);
+    let normalized_expected = normalize_identifier(expected);
+    !normalized_candidate.is_empty() && normalized_candidate == normalized_expected
+}
+
+fn push_alias(aliases: &mut Vec<String>, candidate: Option<&str>) {
+    let Some(candidate) = candidate.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+
+    if aliases
+        .iter()
+        .any(|existing| identifier_matches(existing, candidate))
+    {
+        return;
+    }
+
+    aliases.push(candidate.to_string());
+}
+
+fn collect_validator_aliases(
+    status: &MonitorNodeStatus,
+    rpc: &MonitorRpcDiagnostics,
+) -> Vec<String> {
+    let mut aliases = Vec::new();
+    push_alias(
+        &mut aliases,
+        rpc.node_info
+            .as_ref()
+            .and_then(|value| value.get("name"))
+            .and_then(|value| value.as_str()),
+    );
+    push_alias(&mut aliases, Some(status.node.node_id.as_str()));
+    push_alias(&mut aliases, Some(status.node.machine_id.as_str()));
+    aliases
+}
+
+fn find_local_validator_entry<'a>(
+    status: &MonitorNodeStatus,
+    rpc: &'a MonitorRpcDiagnostics,
+) -> Option<&'a Value> {
+    let address = status.node.node_address.clone().unwrap_or_default();
+    let aliases = collect_validator_aliases(status, rpc);
+
+    rpc.validator_activity
+        .as_ref()
+        .and_then(|value| value.get("validators"))
+        .and_then(|value| value.as_array())
+        .and_then(|validators| {
+            validators.iter().find(|validator| {
+                let address_match = validator
+                    .get("address")
+                    .and_then(|value| value.as_str())
+                    .map(|candidate| !address.is_empty() && identifier_matches(candidate, &address))
+                    .unwrap_or(false);
+                let name_match = validator
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .map(|candidate| {
+                        aliases
+                            .iter()
+                            .any(|alias| identifier_matches(candidate, alias))
+                    })
+                    .unwrap_or(false);
+                address_match || name_match
+            })
+        })
+}
+
+fn extract_latest_block_signature_algorithms(rpc: &MonitorRpcDiagnostics) -> Vec<String> {
+    let mut algorithms = Vec::new();
+    let Some(block) = rpc.latest_block.as_ref() else {
+        return algorithms;
+    };
+
+    let transactions = block
+        .get("transactions")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    for tx in transactions {
+        if let Some(algo) = tx
+            .get("signature_algorithm")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_ascii_lowercase())
+        {
+            if !algorithms.iter().any(|existing| existing == &algo) {
+                algorithms.push(algo);
+            }
+        }
+    }
+
+    algorithms
+}
+
+fn build_role_execution(
+    status: &MonitorNodeStatus,
+    rpc: &MonitorRpcDiagnostics,
+) -> MonitorRoleExecution {
+    let mut checks = Vec::new();
+    let role_group = status.node.role_group.to_ascii_lowercase();
+    let role = status.node.role.to_ascii_lowercase();
+    let node_type = status.node.node_type.to_ascii_lowercase();
+    let address = status.node.node_address.clone().unwrap_or_default();
+    let now_ts = current_unix_seconds();
+
+    if status.online {
+        add_execution_check(
+            &mut checks,
+            "rpc_reachability",
+            "RPC Reachability",
+            "pass",
+            format!("Node responded in {} ms.", status.response_ms),
+        );
+    } else {
+        add_execution_check(
+            &mut checks,
+            "rpc_reachability",
+            "RPC Reachability",
+            "fail",
+            "Node did not respond to monitor RPC probes.",
+        );
+        return summarize_execution(&checks);
+    }
+
+    if role_group == "interop"
+        || role.contains("relayer")
+        || role.contains("witness")
+        || role.contains("oracle")
+        || node_type.contains("relayer")
+        || node_type.contains("cross-chain")
+    {
+        let relayer_entry = find_local_relayer_entry(rpc, &address);
+        let relayer_registered = relayer_entry.is_some();
+        let strict_relayer_registration = role.contains("relayer") || node_type.contains("relayer");
+
+        if relayer_registered {
+            add_execution_check(
+                &mut checks,
+                "sxcp_registration",
+                "SXCP Relayer Registration",
+                "pass",
+                "Node address is present in the active relayer set.",
+            );
+        } else if strict_relayer_registration {
+            add_execution_check(
+                &mut checks,
+                "sxcp_registration",
+                "SXCP Relayer Registration",
+                "fail",
+                "Relayer-role node is not registered in synergy_getRelayerSet.",
+            );
+        } else {
+            add_execution_check(
+                &mut checks,
+                "sxcp_registration",
+                "SXCP Relayer Registration",
+                "warn",
+                "Node is not in relayer set. This may be acceptable if this interop role does not self-register.",
+            );
+        }
+
+        if let Some(entry) = relayer_entry {
+            let active = parse_value_as_bool(entry.get("active")).unwrap_or(false);
+            let slashed = parse_value_as_bool(entry.get("slashed")).unwrap_or(false);
+            let last_heartbeat = parse_value_as_u64(entry.get("last_heartbeat")).unwrap_or(0);
+            let heartbeat_age = now_ts.saturating_sub(last_heartbeat);
+            let attestation_count = parse_value_as_u64(entry.get("attestation_count")).unwrap_or(0);
+
+            add_execution_check(
+                &mut checks,
+                "sxcp_active_flag",
+                "Relayer Active Flag",
+                if active { "pass" } else { "fail" },
+                if active {
+                    "Relayer active flag is true.".to_string()
+                } else {
+                    "Relayer active flag is false.".to_string()
+                },
+            );
+
+            add_execution_check(
+                &mut checks,
+                "sxcp_slashed_flag",
+                "Relayer Slashing Status",
+                if slashed { "fail" } else { "pass" },
+                if slashed {
+                    "Relayer is marked slashed in SXCP state.".to_string()
+                } else {
+                    "Relayer is not slashed.".to_string()
+                },
+            );
+
+            let heartbeat_status = if heartbeat_age <= 120 {
+                "pass"
+            } else if heartbeat_age <= 300 {
+                "warn"
+            } else {
+                "fail"
+            };
+            add_execution_check(
+                &mut checks,
+                "sxcp_heartbeat_freshness",
+                "Relayer Heartbeat Freshness",
+                heartbeat_status,
+                format!("Last heartbeat seen {} seconds ago.", heartbeat_age),
+            );
+
+            add_execution_check(
+                &mut checks,
+                "sxcp_attestation_count",
+                "Relayer Attestation Production",
+                if attestation_count > 0 {
+                    "pass"
+                } else {
+                    "warn"
+                },
+                if attestation_count > 0 {
+                    format!("Relayer has produced {} attestations.", attestation_count)
+                } else {
+                    "No attestations produced by this relayer yet.".to_string()
+                },
+            );
+        }
+
+        let network_attestations = extract_attestation_count(rpc.attestations.as_ref());
+        add_execution_check(
+            &mut checks,
+            "sxcp_network_attestations",
+            "SXCP Network Attestation Flow",
+            if network_attestations > 0 {
+                "pass"
+            } else {
+                "warn"
+            },
+            format!(
+                "Monitor observed {} total attestation(s).",
+                network_attestations
+            ),
+        );
+
+        add_execution_check(
+            &mut checks,
+            "p2p_connectivity",
+            "P2P Connectivity",
+            if status.peer_count.unwrap_or(0) > 0 {
+                "pass"
+            } else {
+                "warn"
+            },
+            format!(
+                "Peer count currently reported as {}.",
+                status.peer_count.unwrap_or(0)
+            ),
+        );
+
+        return summarize_execution(&checks);
+    }
+
+    if role_group == "consensus"
+        || role_group == "governance"
+        || role.contains("validator")
+        || node_type == "validator"
+    {
+        let local_validator = find_local_validator_entry(status, rpc);
+        let strict_validator_presence = role_group == "consensus" || role.contains("validator");
+
+        if local_validator.is_some() {
+            add_execution_check(
+                &mut checks,
+                "validator_registry_presence",
+                "Validator Registry Presence",
+                "pass",
+                "Node address appears in active validator activity.",
+            );
+        } else if strict_validator_presence {
+            add_execution_check(
+                &mut checks,
+                "validator_registry_presence",
+                "Validator Registry Presence",
+                "fail",
+                "Consensus/validator node is missing from active validator set.",
+            );
+        } else {
+            add_execution_check(
+                &mut checks,
+                "validator_registry_presence",
+                "Validator Registry Presence",
+                "warn",
+                "Node is not present in validator activity; governance roles may still be operational.",
+            );
+        }
+
+        if let Some(validator) = local_validator {
+            let stake_amount = parse_value_as_u64(validator.get("stake_amount")).unwrap_or(0);
+            let blocks_produced = parse_value_as_u64(validator.get("blocks_produced")).unwrap_or(0);
+            add_execution_check(
+                &mut checks,
+                "validator_stake",
+                "Validator Stake",
+                if stake_amount > 0 { "pass" } else { "fail" },
+                format!("Stake amount reported: {} nWei.", stake_amount),
+            );
+            add_execution_check(
+                &mut checks,
+                "validator_block_production",
+                "Validator Block Production",
+                if blocks_produced > 0 { "pass" } else { "warn" },
+                format!("Blocks produced reported: {}.", blocks_produced),
+            );
+        }
+
+        add_execution_check(
+            &mut checks,
+            "consensus_sync_state",
+            "Consensus Sync State",
+            if status.syncing == Some(false) {
+                "pass"
+            } else {
+                "warn"
+            },
+            format!("Syncing flag: {}.", status.syncing.unwrap_or(true)),
+        );
+        add_execution_check(
+            &mut checks,
+            "consensus_peer_connectivity",
+            "Consensus Peer Connectivity",
+            if status.peer_count.unwrap_or(0) > 0 {
+                "pass"
+            } else {
+                "warn"
+            },
+            format!(
+                "Peer count currently reported as {}.",
+                status.peer_count.unwrap_or(0)
+            ),
+        );
+
+        return summarize_execution(&checks);
+    }
+
+    if role_group == "pqc" || role.contains("pqc") || node_type.contains("pqc") {
+        let has_pqc_prefix = address.to_ascii_lowercase().starts_with("synv2");
+        add_execution_check(
+            &mut checks,
+            "pqc_address_class",
+            "PQC Address Class",
+            if has_pqc_prefix { "pass" } else { "warn" },
+            if has_pqc_prefix {
+                "Address prefix indicates Class-II/PQC identity (synv2...).".to_string()
+            } else {
+                "Address prefix is not synv2; verify that this node is using the intended PQC class address.".to_string()
+            },
+        );
+
+        let signature_algorithms = extract_latest_block_signature_algorithms(rpc);
+        let has_pqc_signatures = signature_algorithms.iter().any(|algo| {
+            algo.contains("fndsa") || algo.contains("mldsa") || algo.contains("slhdsa")
+        });
+        add_execution_check(
+            &mut checks,
+            "pqc_signature_surface",
+            "Observed PQC Signature Surface",
+            if has_pqc_signatures { "pass" } else { "warn" },
+            if signature_algorithms.is_empty() {
+                "No signature algorithm metadata was observed in latest block payload.".to_string()
+            } else {
+                format!(
+                    "Observed signature algorithms: {}.",
+                    signature_algorithms.join(", ")
+                )
+            },
+        );
+
+        add_execution_check(
+            &mut checks,
+            "pqc_sync_and_peers",
+            "PQC Runtime Connectivity",
+            if status.peer_count.unwrap_or(0) > 0 && status.syncing == Some(false) {
+                "pass"
+            } else {
+                "warn"
+            },
+            format!(
+                "Peer count={}, syncing={}.",
+                status.peer_count.unwrap_or(0),
+                status.syncing.unwrap_or(true)
+            ),
+        );
+
+        add_execution_check(
+            &mut checks,
+            "pqc_telemetry_gap",
+            "PQC Node-Specific Telemetry",
+            "warn",
+            "Current RPC surface does not expose dedicated PQC verification counters yet; this check is inferred from observable runtime state.",
+        );
+
+        return summarize_execution(&checks);
+    }
+
+    let service_role = role_group == "services"
+        || node_type.contains("rpc")
+        || node_type.contains("indexer")
+        || node_type.contains("observer");
+
+    if service_role {
+        let latency = status.response_ms;
+        let latency_status = if latency <= 750 {
+            "pass"
+        } else if latency <= 1500 {
+            "warn"
+        } else {
+            "fail"
+        };
+        add_execution_check(
+            &mut checks,
+            "service_rpc_latency",
+            "Service RPC Latency",
+            latency_status,
+            format!("Measured RPC response latency is {} ms.", latency),
+        );
+
+        add_execution_check(
+            &mut checks,
+            "service_sync_state",
+            "Service Sync State",
+            if status.syncing == Some(false) {
+                "pass"
+            } else {
+                "warn"
+            },
+            format!("Syncing flag: {}.", status.syncing.unwrap_or(true)),
+        );
+
+        add_execution_check(
+            &mut checks,
+            "service_peer_connectivity",
+            "Service Peer Connectivity",
+            if status.peer_count.unwrap_or(0) > 0 {
+                "pass"
+            } else {
+                "warn"
+            },
+            format!(
+                "Peer count currently reported as {}.",
+                status.peer_count.unwrap_or(0)
+            ),
+        );
+
+        if node_type.contains("indexer") {
+            add_execution_check(
+                &mut checks,
+                "service_indexer_block_visibility",
+                "Indexer Block Visibility",
+                if status.block_height.unwrap_or(0) > 0 {
+                    "pass"
+                } else {
+                    "warn"
+                },
+                format!(
+                    "Indexer-reported block height is {}.",
+                    status.block_height.unwrap_or(0)
+                ),
+            );
+        }
+
+        return summarize_execution(&checks);
+    }
+
+    add_execution_check(
+        &mut checks,
+        "generic_runtime",
+        "Generic Runtime Health",
+        "pass",
+        format!(
+            "Node is online with block height {:?}, peers {:?}, syncing {:?}.",
+            status.block_height, status.peer_count, status.syncing
+        ),
+    );
+    summarize_execution(&checks)
+}
+
+fn build_role_diagnostics(
+    status: &MonitorNodeStatus,
+    rpc: &MonitorRpcDiagnostics,
+) -> (Value, Vec<String>) {
+    let group = status.node.role_group.to_ascii_lowercase();
+    let role = status.node.role.to_ascii_lowercase();
+    let node_type = status.node.node_type.to_ascii_lowercase();
+    let address = status.node.node_address.clone().unwrap_or_default();
+
+    if group == "interop"
+        || role.contains("relayer")
+        || role.contains("witness")
+        || role.contains("oracle")
+        || node_type.contains("relayer")
+        || node_type.contains("cross-chain")
+        || node_type.contains("witness")
+        || node_type.contains("oracle")
+    {
+        let relayer_entries = extract_relayer_entries(rpc.relayer_set.as_ref());
+        let relayer_count = relayer_entries.len();
+        let local_registered = if address.is_empty() {
+            None
+        } else {
+            Some(relayer_entries.iter().any(|entry| {
+                entry
+                    .get("address")
+                    .and_then(|value| value.as_str())
+                    .map(|candidate| candidate.eq_ignore_ascii_case(&address))
+                    .unwrap_or(false)
+            }))
+        };
+
+        let attestation_count = extract_attestation_count(rpc.attestations.as_ref());
+        let diagnostic = json!({
+            "domain": "SXCP Interop",
+            "local_address": if address.is_empty() { Value::Null } else { Value::String(address.clone()) },
+            "relayer_set_size": relayer_count,
+            "local_relayer_registered": local_registered,
+            "recent_attestations": attestation_count,
+            "rpc_endpoint": status.node.rpc_url,
+            "target_role": status.node.role,
+        });
+
+        let notes = vec![
+            "Interop nodes are expected to maintain relayer liveness and produce attestations for cross-chain proofs.".to_string(),
+            "If relayer registration is false, run SXCP relayer registration before expecting traffic.".to_string(),
+        ];
+
+        return (diagnostic, notes);
+    }
+
+    if group == "consensus"
+        || group == "governance"
+        || role.contains("validator")
+        || node_type == "validator"
+    {
+        let validators = rpc
+            .validator_activity
+            .as_ref()
+            .and_then(|value| value.get("validators"))
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let local_validator = find_local_validator_entry(status, rpc);
+
+        let diagnostic = json!({
+            "domain": "Consensus/Governance",
+            "local_address": if address.is_empty() { Value::Null } else { Value::String(address.clone()) },
+            "active_validator_count": validators.len(),
+            "local_validator": local_validator.cloned(),
+            "latest_block": status.block_height,
+            "peer_count": status.peer_count,
+            "syncing": status.syncing,
+        });
+
+        let notes = vec![
+            "Consensus/governance nodes should maintain steady peer count and progress in block production.".to_string(),
+            "If local validator is null, verify genesis validator list and auto-registration settings.".to_string(),
+        ];
+
+        return (diagnostic, notes);
+    }
+
+    if node_type.contains("pqc") || role.contains("pqc") || group == "pqc" {
+        let diagnostic = json!({
+            "domain": "PQC Services",
+            "cryptography_profile": "FN-DSA-1024 + ML-KEM-1024 (network standard)",
+            "node_address": if address.is_empty() { Value::Null } else { Value::String(address.clone()) },
+            "syncing": status.syncing,
+            "latest_block": status.block_height,
+            "peer_count": status.peer_count,
+            "rpc_endpoint": status.node.rpc_url,
+        });
+
+        let notes = vec![
+            "PQC nodes are expected to remain online for signature verification and post-quantum trust services.".to_string(),
+            "Track latency and peer connectivity because PQC services are coordination-sensitive under load.".to_string(),
+        ];
+
+        return (diagnostic, notes);
+    }
+
+    let diagnostic = json!({
+        "domain": "Infrastructure Services",
+        "node_type": status.node.node_type,
+        "role": status.node.role,
+        "rpc_endpoint": status.node.rpc_url,
+        "latest_block": status.block_height,
+        "peer_count": status.peer_count,
+        "syncing": status.syncing,
+    });
+
+    let notes = vec![
+        "Service nodes should keep RPC health stable and avoid prolonged sync lag.".to_string(),
+        "Use detail diagnostics to validate this role's runtime behavior before load testing."
+            .to_string(),
+    ];
+
+    (diagnostic, notes)
+}
+
+fn extract_relayer_entries(value: Option<&Value>) -> Vec<Value> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+
+    if let Some(entries) = value.as_array() {
+        return entries.clone();
+    }
+
+    if let Some(entries) = value.get("relayers").and_then(|item| item.as_array()) {
+        return entries.clone();
+    }
+
+    if let Some(entries) = value
+        .get("active_relayers")
+        .and_then(|item| item.as_array())
+    {
+        return entries.clone();
+    }
+
+    Vec::new()
+}
+
+fn extract_attestation_count(value: Option<&Value>) -> usize {
+    let Some(value) = value else {
+        return 0;
+    };
+
+    if let Some(entries) = value.as_array() {
+        return entries.len();
+    }
+
+    if let Some(entries) = value.get("attestations").and_then(|item| item.as_array()) {
+        return entries.len();
+    }
+
+    value
+        .get("count")
+        .and_then(|item| item.as_u64())
+        .unwrap_or(0) as usize
+}
+
+fn resolve_control_commands(
+    overrides: &HashMap<String, String>,
+    machine_id: &str,
+    node_id: &str,
+    inventory_path: &Path,
+) -> NodeControlCommands {
+    let machine = machine_id.to_ascii_lowercase().replace('-', "_");
+    let node = node_id.to_ascii_lowercase().replace('-', "_");
+
+    let resolve = |action: &str| -> Option<String> {
+        let keys = [
+            format!("{}_{}_cmd", machine, action),
+            format!("{}_{}_cmd", node, action),
+            format!("{}_{}_command", machine, action),
+            format!("{}_{}_command", node, action),
+        ];
+
+        for key in keys {
+            if let Some(value) = overrides.get(&key) {
+                return Some(value.clone());
+            }
+        }
+
+        None
+    };
+
+    let mut custom_actions = HashMap::new();
+    let custom_prefixes = [
+        format!("{}_action_", machine),
+        format!("{}_action_", node),
+        format!("{}_custom_", machine),
+        format!("{}_custom_", node),
+        "action_".to_string(),
+        "custom_".to_string(),
+    ];
+
+    for (key, value) in overrides {
+        for prefix in &custom_prefixes {
+            let Some(remainder) = key.strip_prefix(prefix.as_str()) else {
+                continue;
+            };
+            let action_slug = remainder
+                .strip_suffix("_cmd")
+                .or_else(|| remainder.strip_suffix("_command"));
+            let Some(action_slug) = action_slug else {
+                continue;
+            };
+            let action_key = normalize_action_key(action_slug);
+            if action_key.is_empty() {
+                continue;
+            }
+            custom_actions
+                .entry(action_key)
+                .or_insert_with(|| value.clone());
+        }
+    }
+
+    let mut commands = NodeControlCommands {
+        start: resolve("start"),
+        stop: resolve("stop"),
+        restart: resolve("restart"),
+        status: resolve("status"),
+        setup: resolve("setup"),
+        export_logs: resolve("export_logs"),
+        view_chain_data: resolve("view_chain_data"),
+        export_chain_data: resolve("export_chain_data"),
+        custom_actions,
+    };
+
+    if let Some(orchestrator_script) = resolve_orchestrator_script_path(inventory_path) {
+        let hosts_env_path = inventory_path
+            .parent()
+            .map(|parent| parent.join("hosts.env"))
+            .filter(|candidate| candidate.is_file())
+            .map(|candidate| candidate.to_string_lossy().to_string());
+
+        let command_for = |operation: &str| {
+            build_orchestrator_command(
+                orchestrator_script.as_str(),
+                hosts_env_path.as_deref(),
+                machine_id,
+                operation,
+            )
+        };
+
+        if commands.start.is_none() {
+            commands.start = Some(command_for("start"));
+        }
+        if commands.stop.is_none() {
+            commands.stop = Some(command_for("stop"));
+        }
+        if commands.restart.is_none() {
+            commands.restart = Some(command_for("restart"));
+        }
+        if commands.status.is_none() {
+            commands.status = Some(command_for("status"));
+        }
+        if commands.setup.is_none() {
+            commands.setup = Some(command_for("setup_node"));
+        }
+        if commands.export_logs.is_none() {
+            commands.export_logs = Some(command_for("export_logs"));
+        }
+        if commands.view_chain_data.is_none() {
+            commands.view_chain_data = Some(command_for("view_chain_data"));
+        }
+        if commands.export_chain_data.is_none() {
+            commands.export_chain_data = Some(command_for("export_chain_data"));
+        }
+
+        let default_custom_actions = [
+            ("install_node", "install_node"),
+            ("bootstrap_node", "bootstrap_node"),
+            ("wireguard_install", "wireguard_install"),
+            ("wireguard_connect", "wireguard_connect"),
+            ("wireguard_disconnect", "wireguard_disconnect"),
+            ("wireguard_status", "wireguard_status"),
+            ("wireguard_restart", "wireguard_restart"),
+            ("node_logs", "logs"),
+        ];
+
+        for (action_key, operation) in default_custom_actions {
+            commands
+                .custom_actions
+                .entry(action_key.to_string())
+                .or_insert_with(|| command_for(operation));
+        }
+    }
+
+    apply_security_ssh_profile(machine_id, node_id, &mut commands);
+
+    commands
+}
+
+fn build_control_capabilities(commands: &NodeControlCommands) -> MonitorControlCapabilities {
+    let start_configured = commands.start.is_some();
+    let stop_configured = commands.stop.is_some();
+    let restart_configured = commands.restart.is_some();
+    let status_configured = commands.status.is_some();
+    let setup_configured = commands.setup.is_some();
+    let export_logs_configured = commands.export_logs.is_some();
+    let view_chain_data_configured = commands.view_chain_data.is_some();
+    let export_chain_data_configured = commands.export_chain_data.is_some();
+
+    let mut custom_actions = commands
+        .custom_actions
+        .keys()
+        .cloned()
+        .map(|key| MonitorControlAction {
+            label: humanize_action_label(&key),
+            description: "Custom operation configured via hosts.env command mapping.".to_string(),
+            category: "custom".to_string(),
+            configured: true,
+            source: "hosts.env".to_string(),
+            key,
+        })
+        .collect::<Vec<_>>();
+    custom_actions.sort_by(|a, b| a.label.cmp(&b.label));
+
+    let enabled = start_configured
+        || stop_configured
+        || restart_configured
+        || status_configured
+        || setup_configured
+        || export_logs_configured
+        || view_chain_data_configured
+        || export_chain_data_configured
+        || !custom_actions.is_empty();
+
+    let configuration_hint = if enabled {
+        "Remote control is enabled for this node (hosts.env mappings and/or bundled orchestrator defaults).".to_string()
+    } else {
+        "Add MACHINE_XX_START_CMD / STOP_CMD / RESTART_CMD / STATUS_CMD plus optional SETUP/EXPORT_LOGS/VIEW_CHAIN_DATA/EXPORT_CHAIN_DATA entries in devnet/lean15/hosts.env, or ship bundled orchestration resources with the app.".to_string()
+    };
+
+    MonitorControlCapabilities {
+        enabled,
+        start_configured,
+        stop_configured,
+        restart_configured,
+        status_configured,
+        setup_configured,
+        export_logs_configured,
+        view_chain_data_configured,
+        export_chain_data_configured,
+        custom_actions,
+        configuration_hint,
+    }
+}
+
+fn build_role_operations(
+    status: &MonitorNodeStatus,
+    commands: &NodeControlCommands,
+) -> Vec<MonitorControlAction> {
+    let role_group = status.node.role_group.to_ascii_lowercase();
+    let role = status.node.role.to_ascii_lowercase();
+    let node_type = status.node.node_type.to_ascii_lowercase();
+    let mut operations = Vec::new();
+
+    let push_rpc = |key: &str,
+                    label: &str,
+                    description: &str,
+                    category: &str,
+                    ops: &mut Vec<MonitorControlAction>| {
+        ops.push(MonitorControlAction {
+            key: key.to_string(),
+            label: label.to_string(),
+            description: description.to_string(),
+            category: category.to_string(),
+            configured: true,
+            source: "rpc".to_string(),
+        });
+    };
+
+    push_rpc(
+        "rpc:get_node_status",
+        "RPC Node Status",
+        "Fetch node runtime status directly over JSON-RPC.",
+        "runtime",
+        &mut operations,
+    );
+    push_rpc(
+        "rpc:get_sync_status",
+        "RPC Sync Status",
+        "Fetch sync state and verify this node is not drifting.",
+        "runtime",
+        &mut operations,
+    );
+    push_rpc(
+        "rpc:get_peer_info",
+        "RPC Peer Info",
+        "Fetch connected peers and gossip visibility.",
+        "runtime",
+        &mut operations,
+    );
+
+    let is_interop = role_group == "interop"
+        || role.contains("relayer")
+        || role.contains("witness")
+        || role.contains("oracle")
+        || node_type.contains("relayer")
+        || node_type.contains("cross-chain")
+        || node_type.contains("oracle")
+        || node_type.contains("witness");
+
+    let is_consensus = role_group == "consensus"
+        || role_group == "governance"
+        || role.contains("validator")
+        || node_type == "validator";
+
+    let is_pqc = role_group == "pqc" || role.contains("pqc") || node_type.contains("pqc");
+
+    let is_services = role_group == "services"
+        || node_type.contains("rpc")
+        || node_type.contains("indexer")
+        || node_type.contains("observer");
+
+    if is_interop {
+        push_rpc(
+            "rpc:get_sxcp_status",
+            "SXCP Status",
+            "Check relayer quorum and heartbeat window health.",
+            "interop",
+            &mut operations,
+        );
+        push_rpc(
+            "rpc:get_relayer_set",
+            "Relayer Set",
+            "Fetch registered relayers and active/slashed flags.",
+            "interop",
+            &mut operations,
+        );
+        push_rpc(
+            "rpc:get_relayer_health",
+            "Relayer Health",
+            "Inspect per-relayer liveness and heartbeat metrics.",
+            "interop",
+            &mut operations,
+        );
+        push_rpc(
+            "rpc:get_attestations",
+            "Recent Attestations",
+            "Fetch recent SXCP attestations for cross-chain test traffic.",
+            "interop",
+            &mut operations,
+        );
+    }
+
+    if is_consensus {
+        push_rpc(
+            "rpc:get_validator_activity",
+            "Validator Activity",
+            "Inspect validator stake, blocks produced, and participation.",
+            "consensus",
+            &mut operations,
+        );
+        push_rpc(
+            "rpc:get_validators",
+            "Validator Set",
+            "Fetch active validators and verify membership.",
+            "consensus",
+            &mut operations,
+        );
+        push_rpc(
+            "rpc:get_determinism_digest",
+            "Determinism Digest",
+            "Read deterministic digest to compare state consistency across nodes.",
+            "consensus",
+            &mut operations,
+        );
+    }
+
+    if is_pqc {
+        push_rpc(
+            "rpc:get_latest_block",
+            "Latest Block Payload",
+            "Inspect latest block and signature metadata from this PQC node.",
+            "pqc",
+            &mut operations,
+        );
+        push_rpc(
+            "rpc:get_determinism_digest",
+            "Determinism Digest",
+            "Validate deterministic state proof from PQC service node.",
+            "pqc",
+            &mut operations,
+        );
+    }
+
+    if is_services {
+        push_rpc(
+            "rpc:get_network_stats",
+            "Network Stats",
+            "Fetch RPC-facing throughput and network counters.",
+            "services",
+            &mut operations,
+        );
+        push_rpc(
+            "rpc:get_all_wallets",
+            "Wallet Inventory",
+            "Fetch wallet list for quick explorer comparison.",
+            "services",
+            &mut operations,
+        );
+        push_rpc(
+            "rpc:get_latest_block",
+            "Latest Block",
+            "Fetch latest block for explorer/indexer parity checks.",
+            "services",
+            &mut operations,
+        );
+    }
+
+    let mut custom_ops = commands
+        .custom_actions
+        .keys()
+        .cloned()
+        .map(|key| MonitorControlAction {
+            label: humanize_action_label(&key),
+            description: "Custom machine action configured in hosts.env.".to_string(),
+            category: "custom".to_string(),
+            configured: true,
+            source: "hosts.env".to_string(),
+            key,
+        })
+        .collect::<Vec<_>>();
+    custom_ops.sort_by(|a, b| a.label.cmp(&b.label));
+    operations.extend(custom_ops);
+    operations
+}
+
+fn build_atlas_links(
+    overrides: &HashMap<String, String>,
+    status: &MonitorNodeStatus,
+    rpc: &MonitorRpcDiagnostics,
+) -> MonitorAtlasLinks {
+    let machine_id = status.node.machine_id.as_str();
+    let node_id = status.node.node_id.as_str();
+
+    let base_url = resolve_override_value(overrides, machine_id, node_id, "atlas_base_url")
+        .or_else(|| resolve_override_value(overrides, machine_id, node_id, "atlas_url"))
+        .or_else(|| resolve_override_value(overrides, machine_id, node_id, "atlas_home_url"))
+        .or_else(|| resolve_override_value(overrides, machine_id, node_id, "explorer_url"))
+        .or_else(|| {
+            resolve_override_value(overrides, machine_id, node_id, "synergy_explorer_endpoint")
+        })
+        .or_else(|| std::env::var("SYNERGY_ATLAS_BASE_URL").ok())
+        .or_else(|| std::env::var("SYNERGY_EXPLORER_ENDPOINT").ok())
+        .or_else(|| Some("https://devnet-explorer.synergy-network.io".to_string()))
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty());
+
+    let enabled = base_url.is_some();
+    let home_url = base_url.clone();
+    // Atlas is a hash-router app (`#/...`), so deep links must target hash routes.
+    let transactions_url = base_url
+        .as_ref()
+        .map(|base| join_url(base, "#/transactions"));
+    let wallets_url = base_url.as_ref().map(|base| join_url(base, "#/wallet"));
+    let contracts_url = base_url.as_ref().map(|base| join_url(base, "#/contracts"));
+
+    let latest_block = status
+        .block_height
+        .or_else(|| rpc.latest_block.as_ref().and_then(parse_block_height));
+    let latest_block_url = match (base_url.as_ref(), latest_block) {
+        (Some(base), Some(height)) => Some(join_url(base, format!("#/block/{height}").as_str())),
+        _ => None,
+    };
+
+    let latest_transaction_hash = extract_latest_transaction_hash(rpc.latest_block.as_ref());
+    let latest_transaction_url = match (base_url.as_ref(), latest_transaction_hash.as_ref()) {
+        (Some(base), Some(hash)) => Some(join_url(base, format!("#/tx/{hash}").as_str())),
+        _ => None,
+    };
+
+    let node_wallet_url = match (base_url.as_ref(), status.node.node_address.as_ref()) {
+        (Some(base), Some(address)) if !address.trim().is_empty() => Some(join_url(
+            base,
+            format!("#/address/{}", address.trim()).as_str(),
+        )),
+        _ => None,
+    };
+
+    MonitorAtlasLinks {
+        enabled,
+        base_url,
+        home_url,
+        transactions_url,
+        wallets_url,
+        contracts_url,
+        latest_block_url,
+        latest_transaction_url,
+        latest_transaction_hash,
+        node_wallet_url,
+    }
+}
+
+fn resolve_override_value(
+    overrides: &HashMap<String, String>,
+    machine_id: &str,
+    node_id: &str,
+    key_name: &str,
+) -> Option<String> {
+    let machine = machine_id.to_ascii_lowercase().replace('-', "_");
+    let node = node_id.to_ascii_lowercase().replace('-', "_");
+    let target = key_name.to_ascii_lowercase().replace('-', "_");
+
+    let keys = [
+        format!("{}_{}", machine, target),
+        format!("{}_{}", node, target),
+        target,
+    ];
+
+    for key in keys {
+        if let Some(value) = overrides.get(&key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+fn resolve_control_action_command(commands: &NodeControlCommands, action: &str) -> Option<String> {
+    match action {
+        "start" => commands.start.clone(),
+        "stop" => commands.stop.clone(),
+        "restart" => commands.restart.clone(),
+        "status" => commands.status.clone(),
+        "setup" => commands.setup.clone(),
+        "export_logs" => commands.export_logs.clone(),
+        "view_chain_data" => commands.view_chain_data.clone(),
+        "export_chain_data" => commands.export_chain_data.clone(),
+        _ => commands.custom_actions.get(action).cloned(),
+    }
+}
+
+fn resolve_rpc_control_call(action: &str) -> Option<(&'static str, Value)> {
+    let rpc_action = action.strip_prefix("rpc:")?;
+    match rpc_action {
+        "get_node_status" | "node_status" => Some(("synergy_getNodeStatus", json!([]))),
+        "get_sync_status" | "sync_status" => Some(("synergy_getSyncStatus", json!([]))),
+        "get_peer_info" | "peer_info" => Some(("synergy_getPeerInfo", json!([]))),
+        "get_latest_block" | "latest_block" => Some(("synergy_getLatestBlock", json!([]))),
+        "get_network_stats" | "network_stats" => Some(("synergy_getNetworkStats", json!([]))),
+        "get_all_wallets" | "all_wallets" => Some(("synergy_getAllWallets", json!([]))),
+        "get_validator_activity" | "validator_activity" => {
+            Some(("synergy_getValidatorActivity", json!([])))
+        }
+        "get_validators" | "validators" => Some(("synergy_getValidators", json!([]))),
+        "get_determinism_digest" | "determinism_digest" => {
+            Some(("synergy_getDeterminismDigest", json!([])))
+        }
+        "get_sxcp_status" | "sxcp_status" => Some(("synergy_getSxcpStatus", json!([]))),
+        "get_relayer_set" | "relayer_set" => Some(("synergy_getRelayerSet", json!([]))),
+        "get_relayer_health" | "relayer_health" => Some(("synergy_getRelayerHealth", json!([]))),
+        "get_attestations" | "attestations" => Some(("synergy_getAttestations", json!([25_u64]))),
+        _ => None,
+    }
+}
+
+fn normalize_action_key(value: &str) -> String {
+    let raw = value.trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+
+    let lowered = raw.to_ascii_lowercase();
+    if let Some(rpc_action) = lowered.strip_prefix("rpc:") {
+        let normalized = normalize_action_fragment(rpc_action);
+        if normalized.is_empty() {
+            String::new()
+        } else {
+            format!("rpc:{normalized}")
+        }
+    } else {
+        normalize_action_fragment(&lowered)
+    }
+}
+
+fn normalize_action_fragment(value: &str) -> String {
+    let mut output = String::new();
+    let mut previous_separator = false;
+
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            output.push(ch.to_ascii_lowercase());
+            previous_separator = false;
+        } else if !previous_separator {
+            output.push('_');
+            previous_separator = true;
+        }
+    }
+
+    output.trim_matches('_').to_string()
+}
+
+fn join_url(base: &str, path: &str) -> String {
+    let trimmed_base = base.trim().trim_end_matches('/');
+    let trimmed_path = path.trim().trim_start_matches('/');
+    if trimmed_path.is_empty() {
+        trimmed_base.to_string()
+    } else {
+        format!("{trimmed_base}/{trimmed_path}")
+    }
+}
+
+fn extract_latest_transaction_hash(value: Option<&Value>) -> Option<String> {
+    let block = value?;
+    let transactions = block
+        .get("transactions")
+        .and_then(|candidate| candidate.as_array())?;
+
+    for transaction in transactions {
+        let hash = transaction
+            .get("hash")
+            .or_else(|| transaction.get("tx_hash"))
+            .or_else(|| transaction.get("transaction_hash"))
+            .or_else(|| transaction.get("id"))
+            .and_then(|candidate| candidate.as_str())
+            .map(str::trim)
+            .filter(|candidate| !candidate.is_empty());
+        if let Some(hash) = hash {
+            return Some(hash.to_string());
+        }
+    }
+
+    None
+}
+
+fn humanize_action_label(key: &str) -> String {
+    let has_rpc_prefix = key.starts_with("rpc:");
+    let raw = key.strip_prefix("rpc:").unwrap_or(key);
+    let tokens = raw
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            let Some(first) = chars.next() else {
+                return String::new();
+            };
+            let mut token = String::new();
+            token.push(first.to_ascii_uppercase());
+            token.push_str(chars.as_str());
+            token
+        })
+        .collect::<Vec<_>>();
+
+    let label = if tokens.is_empty() {
+        "Action".to_string()
+    } else {
+        tokens.join(" ")
+    };
+
+    if has_rpc_prefix {
+        format!("RPC {label}")
+    } else {
+        label
+    }
+}
+
+fn sanitize_filename_fragment(value: &str) -> String {
+    let mut output = String::new();
+    let mut previous_separator = false;
+
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            output.push(ch.to_ascii_lowercase());
+            previous_separator = false;
+        } else if !previous_separator {
+            output.push('_');
+            previous_separator = true;
+        }
+    }
+
+    let output = output.trim_matches('_').to_string();
+    if output.is_empty() {
+        "node".to_string()
+    } else {
+        output
+    }
+}
+
+fn resolve_orchestrator_script_path(inventory_path: &Path) -> Option<String> {
+    if let Ok(override_path) = std::env::var("SYNERGY_MONITOR_ORCHESTRATOR") {
+        let candidate = PathBuf::from(override_path.trim());
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+
+    let mut candidates = Vec::new();
+
+    if let Some(lean15_dir) = inventory_path.parent() {
+        if let Some(devnet_dir) = lean15_dir.parent() {
+            if let Some(root_dir) = devnet_dir.parent() {
+                candidates.push(root_dir.join("scripts/devnet15/remote-node-orchestrator.sh"));
+            }
+        }
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        for ancestor in current_dir.ancestors().take(10) {
+            candidates.push(ancestor.join("scripts/devnet15/remote-node-orchestrator.sh"));
+        }
+    }
+
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(exe_dir) = executable.parent() {
+            candidates
+                .push(exe_dir.join("../Resources/scripts/devnet15/remote-node-orchestrator.sh"));
+            candidates
+                .push(exe_dir.join("../../Resources/scripts/devnet15/remote-node-orchestrator.sh"));
+            candidates.push(
+                exe_dir.join(
+                    "../Resources/_up_/_up_/_up_/scripts/devnet15/remote-node-orchestrator.sh",
+                ),
+            );
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| candidate.to_string_lossy().to_string())
+}
+
+fn build_orchestrator_command(
+    script_path: &str,
+    hosts_env_path: Option<&str>,
+    machine_id: &str,
+    operation: &str,
+) -> String {
+    let mut parts = Vec::new();
+    if let Some(hosts_env_path) = hosts_env_path {
+        parts.push(format!(
+            "SYNERGY_MONITOR_HOSTS_ENV={}",
+            shell_quote(hosts_env_path)
+        ));
+    }
+
+    parts.push("bash".to_string());
+    parts.push(shell_quote(script_path));
+    parts.push(shell_quote(machine_id));
+    parts.push(shell_quote(operation));
+    parts.join(" ")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+const MONITOR_WORKSPACE_ENV: &str = "SYNERGY_MONITOR_WORKSPACE";
+const MONITOR_SECURITY_CONFIG_RELATIVE: &str = "config/security.json";
+const MONITOR_AUDIT_LOG_RELATIVE: &str = "audit/control-actions.jsonl";
+
+pub fn ensure_monitor_workspace(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    fs::create_dir_all(&app_data_dir).map_err(|error| {
+        format!(
+            "Failed to create app data directory {}: {error}",
+            app_data_dir.display()
+        )
+    })?;
+
+    let workspace_root = app_data_dir.join("monitor-workspace");
+    fs::create_dir_all(&workspace_root).map_err(|error| {
+        format!(
+            "Failed to create monitor workspace {}: {error}",
+            workspace_root.display()
+        )
+    })?;
+
+    // Prefer this writable workspace for all monitor runtime state.
+    std::env::set_var(
+        MONITOR_WORKSPACE_ENV,
+        workspace_root.to_string_lossy().to_string(),
+    );
+
+    extract_bundled_resources_to_workspace(app_handle, &workspace_root)?;
+    ensure_security_config_exists(&workspace_root)?;
+
+    let inventory_path = workspace_root.join("devnet/lean15/node-inventory.csv");
+    if inventory_path.is_file() {
+        std::env::set_var(
+            "SYNERGY_MONITOR_INVENTORY",
+            inventory_path.to_string_lossy().to_string(),
+        );
+    }
+
+    Ok(workspace_root)
+}
+
+fn extract_bundled_resources_to_workspace(
+    app_handle: &AppHandle,
+    workspace_root: &Path,
+) -> Result<(), String> {
+    let relative_paths = [
+        "devnet/lean15/node-inventory.csv",
+        "devnet/lean15/hosts.env.example",
+        "devnet/lean15/keys/node-addresses.csv",
+        "devnet/lean15/configs",
+        "devnet/lean15/installers",
+        "devnet/lean15/wireguard",
+        "scripts/devnet15",
+        "scripts/reset-devnet.sh",
+        "guides/NETWORK_NODE_MONITOR_USER_MANUAL.md",
+    ];
+
+    let roots = discover_workspace_source_roots(app_handle);
+    for relative in relative_paths {
+        if let Some(source) = roots
+            .iter()
+            .map(|root| root.join(relative))
+            .find(|candidate| candidate.exists())
+        {
+            let destination = workspace_root.join(relative);
+            copy_path_if_missing_or_directory(&source, &destination)?;
+        }
+    }
+
+    let hosts_env = workspace_root.join("devnet/lean15/hosts.env");
+    if !hosts_env.is_file() {
+        let example = workspace_root.join("devnet/lean15/hosts.env.example");
+        if example.is_file() {
+            if let Some(parent) = hosts_env.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    format!(
+                        "Failed to create hosts.env parent directory {}: {error}",
+                        parent.display()
+                    )
+                })?;
+            }
+            fs::copy(&example, &hosts_env).map_err(|error| {
+                format!(
+                    "Failed to copy {} to {}: {error}",
+                    example.display(),
+                    hosts_env.display()
+                )
+            })?;
+        }
+    }
+
+    let inventory_path = workspace_root.join("devnet/lean15/node-inventory.csv");
+    if !inventory_path.is_file() {
+        return Err(format!(
+            "Workspace initialization failed: {} not found after extraction",
+            inventory_path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn discover_workspace_source_roots(app_handle: &AppHandle) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        roots.push(resource_dir.clone());
+        roots.push(resource_dir.join("_up_"));
+        roots.push(resource_dir.join("_up_/_up_/_up_"));
+    }
+
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(exe_dir) = executable.parent() {
+            roots.push(exe_dir.to_path_buf());
+            roots.push(exe_dir.join("../Resources"));
+            roots.push(exe_dir.join("../Resources/_up_/_up_/_up_"));
+        }
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        roots.push(current_dir.clone());
+        for ancestor in current_dir.ancestors().take(8) {
+            roots.push(ancestor.to_path_buf());
+        }
+    }
+
+    dedupe_paths(roots)
+}
+
+fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut output = Vec::new();
+    for path in paths {
+        if output.iter().any(|existing: &PathBuf| existing == &path) {
+            continue;
+        }
+        output.push(path);
+    }
+    output
+}
+
+fn copy_path_if_missing_or_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    if source.is_dir() {
+        copy_directory_recursive(source, destination)?;
+        return Ok(());
+    }
+
+    if destination.is_file() {
+        return Ok(());
+    }
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create destination parent directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    fs::copy(source, destination).map_err(|error| {
+        format!(
+            "Failed to copy {} to {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|error| {
+        format!(
+            "Failed to create directory {}: {error}",
+            destination.display()
+        )
+    })?;
+
+    let entries = fs::read_dir(source)
+        .map_err(|error| format!("Failed to read directory {}: {error}", source.display()))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Failed to read directory entry in {}: {error}",
+                source.display()
+            )
+        })?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_directory_recursive(&source_path, &destination_path)?;
+        } else if !destination_path.exists() {
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    format!("Failed to create directory {}: {error}", parent.display())
+                })?;
+            }
+            fs::copy(&source_path, &destination_path).map_err(|error| {
+                format!(
+                    "Failed to copy {} to {}: {error}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_monitor_workspace_path() -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var(MONITOR_WORKSPACE_ENV) {
+        let candidate = PathBuf::from(path.trim());
+        if !candidate.as_os_str().is_empty() {
+            fs::create_dir_all(&candidate).map_err(|error| {
+                format!(
+                    "Failed to create monitor workspace directory {}: {error}",
+                    candidate.display()
+                )
+            })?;
+            return Ok(candidate);
+        }
+    }
+
+    let default = dirs::data_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("synergy-node-monitor")
+        .join("monitor-workspace");
+    fs::create_dir_all(&default).map_err(|error| {
+        format!(
+            "Failed to create default monitor workspace {}: {error}",
+            default.display()
+        )
+    })?;
+    std::env::set_var(MONITOR_WORKSPACE_ENV, default.to_string_lossy().to_string());
+    Ok(default)
+}
+
+fn security_config_path() -> Result<PathBuf, String> {
+    let workspace = resolve_monitor_workspace_path()?;
+    Ok(workspace.join(MONITOR_SECURITY_CONFIG_RELATIVE))
+}
+
+fn ensure_security_config_exists(workspace: &Path) -> Result<(), String> {
+    let path = workspace.join(MONITOR_SECURITY_CONFIG_RELATIVE);
+    if path.is_file() {
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create security config directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let default_config = MonitorSecurityConfig {
+        version: 1,
+        active_operator_id: "local_admin".to_string(),
+        operators: vec![MonitorOperatorProfile {
+            operator_id: "local_admin".to_string(),
+            display_name: "Local Admin".to_string(),
+            role: "admin".to_string(),
+            enabled: true,
+            created_at_utc: now.clone(),
+            updated_at_utc: now,
+        }],
+        ssh_profiles: Vec::new(),
+        machine_bindings: Vec::new(),
+    };
+
+    let encoded = serde_json::to_vec_pretty(&default_config)
+        .map_err(|error| format!("Failed to serialize default security config: {error}"))?;
+    fs::write(&path, encoded).map_err(|error| {
+        format!(
+            "Failed to write security config {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn load_security_config() -> Result<MonitorSecurityConfig, String> {
+    let path = security_config_path()?;
+    if !path.is_file() {
+        let workspace = resolve_monitor_workspace_path()?;
+        ensure_security_config_exists(&workspace)?;
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("Failed to read security config {}: {error}", path.display()))?;
+    let mut config: MonitorSecurityConfig = serde_json::from_str(&content).map_err(|error| {
+        format!(
+            "Failed to parse security config {}: {error}",
+            path.display()
+        )
+    })?;
+
+    if config.operators.is_empty() {
+        let now = Utc::now().to_rfc3339();
+        config.operators.push(MonitorOperatorProfile {
+            operator_id: "local_admin".to_string(),
+            display_name: "Local Admin".to_string(),
+            role: "admin".to_string(),
+            enabled: true,
+            created_at_utc: now.clone(),
+            updated_at_utc: now,
+        });
+        config.active_operator_id = "local_admin".to_string();
+        save_security_config(&config)?;
+    }
+
+    Ok(config)
+}
+
+fn save_security_config(config: &MonitorSecurityConfig) -> Result<(), String> {
+    let path = security_config_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create security config parent {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let encoded = serde_json::to_vec_pretty(config)
+        .map_err(|error| format!("Failed to serialize security config: {error}"))?;
+    fs::write(&path, encoded).map_err(|error| {
+        format!(
+            "Failed to write security config {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn load_monitor_security_state() -> Result<MonitorSecurityState, String> {
+    let config = load_security_config()?;
+    let active = resolve_active_operator(&config)?;
+    let workspace_path = resolve_monitor_workspace_path()?;
+    let inventory_path = resolve_inventory_path()?;
+    let role_permissions = vec![
+        role_permissions_for("admin"),
+        role_permissions_for("operator"),
+        role_permissions_for("viewer"),
+    ];
+    Ok(MonitorSecurityState {
+        workspace_path: workspace_path.to_string_lossy().to_string(),
+        inventory_path: inventory_path.to_string_lossy().to_string(),
+        active_operator_id: active.operator_id.clone(),
+        active_role: active.role.clone(),
+        operators: config.operators.clone(),
+        ssh_profiles: config.ssh_profiles.clone(),
+        machine_bindings: config.machine_bindings.clone(),
+        role_permissions,
+    })
+}
+
+fn resolve_active_operator(
+    config: &MonitorSecurityConfig,
+) -> Result<MonitorOperatorProfile, String> {
+    if let Some(active) = config.operators.iter().find(|operator| {
+        operator.enabled
+            && operator
+                .operator_id
+                .eq_ignore_ascii_case(&config.active_operator_id)
+    }) {
+        return Ok(active.clone());
+    }
+    if let Some(fallback) = config.operators.iter().find(|operator| operator.enabled) {
+        return Ok(fallback.clone());
+    }
+    Err("No enabled operators configured. Configure at least one admin operator.".to_string())
+}
+
+fn normalize_operator_role(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "admin" | "operator" | "viewer" => Ok(normalized),
+        _ => Err("role must be one of: admin, operator, viewer".to_string()),
+    }
+}
+
+fn enforce_security_admin(operator: &MonitorOperatorProfile) -> Result<(), String> {
+    if operator.role.eq_ignore_ascii_case("admin") {
+        Ok(())
+    } else {
+        Err(format!(
+            "RBAC denied: role '{}' cannot manage security/SSH profiles",
+            operator.role
+        ))
+    }
+}
+
+fn role_permissions_for(role: &str) -> MonitorRolePermissions {
+    match role {
+        "admin" => MonitorRolePermissions {
+            role: "admin".to_string(),
+            can_control_nodes: true,
+            can_run_bulk_actions: true,
+            can_manage_security: true,
+        },
+        "operator" => MonitorRolePermissions {
+            role: "operator".to_string(),
+            can_control_nodes: true,
+            can_run_bulk_actions: true,
+            can_manage_security: false,
+        },
+        _ => MonitorRolePermissions {
+            role: "viewer".to_string(),
+            can_control_nodes: false,
+            can_run_bulk_actions: false,
+            can_manage_security: false,
+        },
+    }
+}
+
+fn role_allows_control(role: &str, action: &str) -> bool {
+    let normalized_role = role.trim().to_ascii_lowercase();
+    let normalized_action = normalize_action_key(action);
+    if normalized_role == "admin" {
+        return true;
+    }
+    if normalized_role == "viewer" {
+        return false;
+    }
+    if normalized_role != "operator" {
+        return false;
+    }
+
+    if normalized_action.starts_with("rpc:") {
+        return true;
+    }
+
+    let admin_only = [
+        "install_node",
+        "bootstrap_node",
+        "wireguard_install",
+        "wireguard_connect",
+        "wireguard_disconnect",
+        "wireguard_restart",
+    ];
+    !admin_only
+        .iter()
+        .any(|admin_action| normalized_action == *admin_action)
+}
+
+fn apply_security_ssh_profile(machine_id: &str, node_id: &str, commands: &mut NodeControlCommands) {
+    let Ok(config) = load_security_config() else {
+        return;
+    };
+
+    let binding = config.machine_bindings.iter().find(|binding| {
+        binding.machine_id.eq_ignore_ascii_case(machine_id)
+            || binding.machine_id.eq_ignore_ascii_case(node_id)
+    });
+    let Some(binding) = binding else {
+        return;
+    };
+
+    let profile = config
+        .ssh_profiles
+        .iter()
+        .find(|profile| profile.profile_id.eq_ignore_ascii_case(&binding.profile_id));
+    let Some(profile) = profile else {
+        return;
+    };
+
+    let machine_key = machine_id.to_ascii_uppercase().replace('-', "_");
+    let mut env_pairs = Vec::<(String, String)>::new();
+    env_pairs.push((
+        "SYNERGY_DEVNET_SSH_USER".to_string(),
+        profile.ssh_user.clone(),
+    ));
+    env_pairs.push((
+        "SYNERGY_DEVNET_SSH_PORT".to_string(),
+        profile.ssh_port.to_string(),
+    ));
+    if let Some(value) = profile
+        .ssh_key_path
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        env_pairs.push(("SYNERGY_DEVNET_SSH_KEY".to_string(), value.to_string()));
+    }
+    if let Some(value) = profile
+        .remote_root
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        env_pairs.push(("SYNERGY_REMOTE_ROOT".to_string(), value.to_string()));
+    }
+    if let Some(value) = binding
+        .host_override
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        env_pairs.push((format!("{machine_key}_HOST"), value.to_string()));
+    }
+    if let Some(value) = binding
+        .remote_dir_override
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        env_pairs.push((format!("{machine_key}_REMOTE_DIR"), value.to_string()));
+    }
+
+    prefix_commands_with_env(commands, &env_pairs);
+}
+
+fn prefix_commands_with_env(commands: &mut NodeControlCommands, env_pairs: &[(String, String)]) {
+    if env_pairs.is_empty() {
+        return;
+    }
+
+    let prefix = env_pairs
+        .iter()
+        .map(|(key, value)| format!("{key}={}", shell_quote(value)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let prepend = |command: &str| -> String {
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            String::new()
+        } else {
+            format!("{prefix} {trimmed}")
+        }
+    };
+
+    if let Some(command) = commands.start.as_mut() {
+        *command = prepend(command);
+    }
+    if let Some(command) = commands.stop.as_mut() {
+        *command = prepend(command);
+    }
+    if let Some(command) = commands.restart.as_mut() {
+        *command = prepend(command);
+    }
+    if let Some(command) = commands.status.as_mut() {
+        *command = prepend(command);
+    }
+    if let Some(command) = commands.setup.as_mut() {
+        *command = prepend(command);
+    }
+    if let Some(command) = commands.export_logs.as_mut() {
+        *command = prepend(command);
+    }
+    if let Some(command) = commands.view_chain_data.as_mut() {
+        *command = prepend(command);
+    }
+    if let Some(command) = commands.export_chain_data.as_mut() {
+        *command = prepend(command);
+    }
+    for command in commands.custom_actions.values_mut() {
+        *command = prepend(command);
+    }
+}
+
+fn select_nodes_for_scope(nodes: &[MonitorNode], scope: &str) -> Vec<String> {
+    let normalized = scope.trim().to_ascii_lowercase();
+    if normalized.is_empty() || normalized == "all" {
+        return nodes
+            .iter()
+            .map(|node| node.machine_id.clone())
+            .collect::<Vec<_>>();
+    }
+
+    if let Some(group) = normalized.strip_prefix("role_group:") {
+        let target = group.trim();
+        return nodes
+            .iter()
+            .filter(|node| node.role_group.to_ascii_lowercase() == target)
+            .map(|node| node.machine_id.clone())
+            .collect::<Vec<_>>();
+    }
+
+    if let Some(role) = normalized.strip_prefix("role:") {
+        let target = role.trim();
+        return nodes
+            .iter()
+            .filter(|node| node.role.to_ascii_lowercase().contains(target))
+            .map(|node| node.machine_id.clone())
+            .collect::<Vec<_>>();
+    }
+
+    nodes
+        .iter()
+        .filter(|node| {
+            node.machine_id.eq_ignore_ascii_case(scope) || node.node_id.eq_ignore_ascii_case(scope)
+        })
+        .map(|node| node.machine_id.clone())
+        .collect::<Vec<_>>()
+}
+
+async fn execute_monitor_node_control(
+    machine_id: &str,
+    normalized_action: &str,
+    operator: &MonitorOperatorProfile,
+    control_mode: &str,
+) -> Result<MonitorControlResult, String> {
+    let inventory_path = resolve_inventory_path()?;
+    let nodes = load_inventory_nodes(&inventory_path)?;
+
+    let node = nodes
+        .iter()
+        .find(|candidate| {
+            candidate.machine_id.eq_ignore_ascii_case(machine_id)
+                || candidate.node_id.eq_ignore_ascii_case(machine_id)
+        })
+        .cloned()
+        .ok_or_else(|| format!("Node not found in inventory: {machine_id}"))?;
+
+    let host_overrides = load_hosts_overrides(&inventory_path);
+    let commands = resolve_control_commands(
+        &host_overrides,
+        &node.machine_id,
+        &node.node_id,
+        &inventory_path,
+    );
+
+    let outcome = if normalized_action.starts_with("rpc:") {
+        let (method, params) = resolve_rpc_control_call(normalized_action).ok_or_else(|| {
+            format!(
+                "Unsupported RPC operation '{normalized_action}'. Add a supported rpc:* action or configure a custom MACHINE_XX_ACTION_<name>_CMD."
+            )
+        })?;
+
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .connect_timeout(Duration::from_secs(3))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
+        match rpc_call(&client, &node.rpc_url, method, params).await {
+            Ok(result) => {
+                let stdout =
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
+                MonitorControlResult {
+                    machine_id: node.machine_id.clone(),
+                    action: normalized_action.to_string(),
+                    success: true,
+                    exit_code: 0,
+                    command: format!("RPC {method}"),
+                    stdout: truncate_text(stdout.trim(), 6000),
+                    stderr: String::new(),
+                    executed_at_utc: Utc::now().to_rfc3339(),
+                }
+            }
+            Err(error) => MonitorControlResult {
+                machine_id: node.machine_id.clone(),
+                action: normalized_action.to_string(),
+                success: false,
+                exit_code: 1,
+                command: format!("RPC {method}"),
+                stdout: String::new(),
+                stderr: truncate_text(error.trim(), 6000),
+                executed_at_utc: Utc::now().to_rfc3339(),
+            },
+        }
+    } else {
+        let selected_command = resolve_control_action_command(&commands, normalized_action).ok_or_else(
+            || {
+                format!(
+                    "No '{normalized_action}' control command configured for {}. Configure MACHINE_XX_{ACTION}_CMD or MACHINE_XX_ACTION_<name>_CMD in hosts.env.",
+                    node.machine_id,
+                    ACTION = normalized_action.to_ascii_uppercase(),
+                )
+            },
+        )?;
+
+        let (exit_code, stdout, stderr) = run_shell_command(&selected_command)?;
+        let success = exit_code == 0;
+
+        MonitorControlResult {
+            machine_id: node.machine_id.clone(),
+            action: normalized_action.to_string(),
+            success,
+            exit_code,
+            command: truncate_text(&selected_command, 180),
+            stdout: truncate_text(stdout.trim(), 6000),
+            stderr: truncate_text(stderr.trim(), 6000),
+            executed_at_utc: Utc::now().to_rfc3339(),
+        }
+    };
+
+    append_audit_event(json!({
+        "event_type": "control.node.executed",
+        "mode": control_mode,
+        "operator_id": operator.operator_id,
+        "operator_role": operator.role,
+        "machine_id": outcome.machine_id,
+        "action": outcome.action,
+        "success": outcome.success,
+        "exit_code": outcome.exit_code,
+        "command": outcome.command,
+        "timestamp_utc": outcome.executed_at_utc,
+    }))?;
+    Ok(outcome)
+}
+
+fn append_audit_event(event: Value) -> Result<(), String> {
+    let workspace = resolve_monitor_workspace_path()?;
+    let audit_path = workspace.join(MONITOR_AUDIT_LOG_RELATIVE);
+    if let Some(parent) = audit_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create audit directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let mut encoded = serde_json::to_string(&event)
+        .map_err(|error| format!("Failed to serialize audit event: {error}"))?;
+    encoded.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&audit_path)
+        .map_err(|error| format!("Failed to open audit log {}: {error}", audit_path.display()))?;
+    file.write_all(encoded.as_bytes()).map_err(|error| {
+        format!(
+            "Failed to write audit event to {}: {error}",
+            audit_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn sanitize_identifier(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
+}
+
+fn run_shell_command(command: &str) -> Result<(i32, String, String), String> {
+    #[cfg(target_os = "windows")]
+    let output = ProcessCommand::new("cmd")
+        .args(["/C", command])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(not(target_os = "windows"))]
+    let output = ProcessCommand::new("sh")
+        .arg("-lc")
+        .arg(command)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let exit_code = output.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    Ok((exit_code, stdout, stderr))
+}
+
+fn truncate_text(input: &str, max_chars: usize) -> String {
+    if input.chars().count() <= max_chars {
+        return input.to_string();
+    }
+
+    let mut output = String::new();
+    for (index, ch) in input.chars().enumerate() {
+        if index >= max_chars.saturating_sub(3) {
+            break;
+        }
+        output.push(ch);
+    }
+    output.push_str("...");
+    output
+}
