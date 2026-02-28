@@ -1,19 +1,16 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 
 const HELP_WINDOW_LABEL = 'help-articles-window';
+const HELP_HASH_ROUTE = '/help';
+const HELP_WINDOW_URL = `/#${HELP_HASH_ROUTE}`;
 
-function isTauriRuntime() {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+function openHelpInCurrentWindow() {
+  if (typeof window !== 'undefined') {
+    window.location.hash = HELP_HASH_ROUTE;
+  }
 }
 
 export async function openHelpWindow() {
-  const helpRoute = '/#/help';
-
-  if (!isTauriRuntime()) {
-    window.open(helpRoute, '_blank', 'noopener,noreferrer');
-    return;
-  }
-
   try {
     const existing = await WebviewWindow.getByLabel(HELP_WINDOW_LABEL);
     if (existing) {
@@ -24,7 +21,7 @@ export async function openHelpWindow() {
 
     const helpWindow = new WebviewWindow(HELP_WINDOW_LABEL, {
       title: 'Synergy Node Monitor Help',
-      url: helpRoute,
+      url: HELP_WINDOW_URL,
       center: true,
       width: 1080,
       height: 820,
@@ -35,10 +32,10 @@ export async function openHelpWindow() {
 
     helpWindow.once('tauri://error', (event) => {
       console.error('Failed to create help window:', event.payload);
-      window.open(helpRoute, '_blank', 'noopener,noreferrer');
+      openHelpInCurrentWindow();
     });
   } catch (error) {
-    console.error('Help window open failed, falling back to browser tab:', error);
-    window.open(helpRoute, '_blank', 'noopener,noreferrer');
+    console.error('Help window open failed, falling back to current window help route:', error);
+    openHelpInCurrentWindow();
   }
 }

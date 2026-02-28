@@ -1,564 +1,715 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 
-const StepStates = {
-  Idle: 'idle',
-  AwaitType: 'awaitType',
-  ConfirmType: 'confirmType',
-  NicknamePrompt: 'nicknamePrompt',
-  AwaitNickname: 'awaitNickname',
-  Setup: 'setup',
-  Completed: 'completed',
-};
+const WG_BOOTSTRAP_SEQUENCE = ['wireguard_install', 'wireguard_connect', 'wireguard_status'];
+const PROVISION_SEQUENCE = ['setup', 'start', 'status'];
+const EIGHT_DEVICE_NODE_LAYOUT = [
+  ['machine-01'],
+  ['machine-02', 'machine-06'],
+  ['machine-03', 'machine-07'],
+  ['machine-04', 'machine-08'],
+  ['machine-05', 'machine-09'],
+  ['machine-10', 'machine-11'],
+  ['machine-12', 'machine-13'],
+  ['machine-14', 'machine-15'],
+];
 
-const classifyNode = (id) => {
-  const map = {
-    validator: 'Class I — Core Validators & Committee',
-    committee: 'Class I — Core Validators & Committee',
-    archive_validator: 'Class II — Archive, Audit & Data Availability',
-    audit_validator: 'Class II — Archive, Audit & Data Availability',
-    data_availability: 'Class II — Archive, Audit & Data Availability',
-    relayer: 'Class III — Relayers & Cross-Chain',
-    witness: 'Class III — Relayers & Cross-Chain',
-    oracle: 'Class III — Relayers & Cross-Chain',
-    uma_coordinator: 'Class III — Relayers & Cross-Chain',
-    cross_chain_verifier: 'Class III — Relayers & Cross-Chain',
-    compute: 'Class IV — Compute & Specialized',
-    ai_inference: 'Class IV — Compute & Specialized',
-    pqc_crypto: 'Class IV — Compute & Specialized',
-    governance_auditor: 'Class V — Governance & RPC',
-    treasury_controller: 'Class V — Governance & RPC',
-    security_council: 'Class V — Governance & RPC',
-    rpc_gateway: 'Class V — Governance & RPC',
-    indexer: 'Class V — Governance & RPC',
-    observer: 'Class V — Governance & RPC',
-  };
-  return map[id] || 'Other';
-};
+function machineOrdinal(machineId) {
+  const match = String(machineId || '').match(/(\d+)/);
+  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+}
 
-function JarvisAgentSetup({ onComplete }) {
-  const [messages, setMessages] = useState([]);
-  const [userInput, setUserInput] = useState('');
-  const [availableTypes, setAvailableTypes] = useState([]);
-  const [selectedType, setSelectedType] = useState(null);
-  const [currentStep, setCurrentStep] = useState(StepStates.Idle);
-  const [progress, setProgress] = useState(0);
-  const [setupInProgress, setSetupInProgress] = useState(false);
-  const [isTyping, setIsTyping] = useState(false);
-  const [networkError, setNetworkError] = useState(null);
-  const [conversationStarted, setConversationStarted] = useState(false);
-  const [nodeNickname, setNodeNickname] = useState('');
-  const messagesEndRef = useRef(null);
-  const typingTimeoutRef = useRef(null);
-  const agentQueueRef = useRef(Promise.resolve());
+function sortMachineIds(machineIds) {
+  return [...machineIds].sort((a, b) => {
+    const aNum = machineOrdinal(a);
+    const bNum = machineOrdinal(b);
+    if (aNum !== bNum) return aNum - bNum;
+    return String(a).localeCompare(String(b));
+  });
+}
 
-  const addMessage = useCallback((text, sender = 'agent', type = 'text', payload = null) => {
-    setMessages((prev) => [...prev, { text, sender, type, payload }]);
-  }, []);
+function computeAssignments(inventory, deviceCount, deviceHosts) {
+  if (!Number.isFinite(deviceCount) || deviceCount < 1) {
+    return [];
+  }
 
-  const agentSay = useCallback((text, delay = 1000) => {
-    setIsTyping(true);
-    clearTimeout(typingTimeoutRef.current);
-    const typingDelay = Math.min(delay + text.length * 7, 3200);
-    return new Promise((resolve) => {
-      typingTimeoutRef.current = window.setTimeout(() => {
-        addMessage(text, 'agent', 'text');
-        setIsTyping(false);
-        resolve();
-      }, typingDelay);
+  const inventorySet = new Set(inventory.map((entry) => entry.machine_id));
+  if (
+    deviceCount === 8
+    && EIGHT_DEVICE_NODE_LAYOUT.every((group) => group.every((machineId) => inventorySet.has(machineId)))
+  ) {
+    return EIGHT_DEVICE_NODE_LAYOUT.map((machineIds, index) => ({
+      deviceIndex: index,
+      deviceLabel: `device-${String(index + 1).padStart(2, '0')}`,
+      host: String(deviceHosts[index] || '').trim(),
+      machineIds: [...machineIds],
+    }));
+  }
+
+  const machineIds = sortMachineIds(inventory.map((entry) => entry.machine_id));
+  if (!machineIds.length) {
+    return [];
+  }
+
+  const targetNodeCount = Math.min(machineIds.length, deviceCount * 2);
+  const selectedIds = machineIds.slice(0, targetNodeCount);
+
+  const assignments = [];
+  for (let index = 0; index < deviceCount; index += 1) {
+    const start = index * 2;
+    const machineSlice = selectedIds.slice(start, start + 2);
+    assignments.push({
+      deviceIndex: index,
+      deviceLabel: `device-${String(index + 1).padStart(2, '0')}`,
+      host: String(deviceHosts[index] || '').trim(),
+      machineIds: machineSlice,
     });
-  }, [addMessage]);
+  }
 
-  const queueAgentMessage = useCallback((text, delay = 1000) => {
-    agentQueueRef.current = agentQueueRef.current.then(() => agentSay(text, delay));
-    return agentQueueRef.current;
-  }, [agentSay]);
+  return assignments;
+}
 
-  useEffect(() => () => clearTimeout(typingTimeoutRef.current), []);
+function truncateText(value, max = 420) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 3)}...`;
+}
+
+function isAffirmative(value) {
+  return /^(y|yes|apply|go|continue|start|ok)$/i.test(String(value || '').trim());
+}
+
+function isNegative(value) {
+  return /^(n|no|restart|reset)$/i.test(String(value || '').trim());
+}
+
+function formatSequence(sequence) {
+  return sequence.join(' -> ');
+}
+
+function JarvisAgentSetup() {
+  const initializedRef = useRef(false);
+  const messagesEndRef = useRef(null);
+
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [phase, setPhase] = useState('booting');
+  const [running, setRunning] = useState(false);
+
+  const [workspacePath, setWorkspacePath] = useState('');
+  const [inventory, setInventory] = useState([]);
+  const [configuredMachineIds, setConfiguredMachineIds] = useState([]);
+
+  const [machine01Host, setMachine01Host] = useState('');
+  const [deviceCount, setDeviceCount] = useState(0);
+  const [deviceHosts, setDeviceHosts] = useState([]);
+  const [currentDeviceIndex, setCurrentDeviceIndex] = useState(0);
+
+  const [defaults, setDefaults] = useState({
+    sshUser: 'ops',
+    sshPort: '22',
+    sshKeyPath: '~/.ssh/id_ed25519',
+    remoteRoot: '/opt/synergy',
+    wgInterface: 'synergy-devnet',
+    atlasBaseUrl: 'https://devnet-explorer.synergy-network.io',
+  });
+
+  const [haltedAction, setHaltedAction] = useState(null);
+  const [snapshotSummary, setSnapshotSummary] = useState(null);
+
+  const assignmentPlan = useMemo(
+    () => computeAssignments(inventory, deviceCount, deviceHosts),
+    [inventory, deviceCount, deviceHosts],
+  );
+  const inventoryByMachineId = useMemo(() => {
+    const map = new Map();
+    inventory.forEach((entry) => {
+      map.set(entry.machine_id, entry);
+    });
+    return map;
+  }, [inventory]);
+
+  const addMessage = useCallback((sender, text, type = 'text') => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        sender,
+        text,
+        type,
+      },
+    ]);
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isTyping]);
+  }, [messages]);
 
-  const groupedTypes = useMemo(() => {
-    const groups = {};
-    availableTypes
-      .filter((type) => type.compatible)
-      .forEach((type) => {
-        const group = classifyNode(type.id);
-        if (!groups[group]) {
-          groups[group] = [];
-        }
-        groups[group].push(type);
-      });
-    return groups;
-  }, [availableTypes]);
-
-  const insertNodeOptions = useCallback(() => {
-    if (!Object.keys(groupedTypes).length) {
-      return;
-    }
-    addMessage('Select the node type you would like to set up:', 'agent', 'node-options', {
-      groups: groupedTypes,
-    });
-    setCurrentStep(StepStates.AwaitType);
-  }, [addMessage, groupedTypes]);
-
-  const startConversation = useCallback(async () => {
-    if (conversationStarted || availableTypes.length === 0) {
-      return;
-    }
-    setConversationStarted(true);
-    agentQueueRef.current = Promise.resolve();
-    await queueAgentMessage("👋 Hello! I'm Jarvis, your Synergy Network Assistant.", 400);
-    await queueAgentMessage(
-      "I'm here to help you get set up to operate a Synergy node on your own machine. We'll configure an isolated, user-operated local node environment.",
-      500,
-    );
-    await queueAgentMessage(
-      'Before we begin, let me explain something important: your nodes run inside an isolated workspace so your machine stays safe.',
-      500,
-    );
-    await queueAgentMessage(
-      'Setup mode is user-operated local by default, so external network registration and sync are skipped unless you explicitly switch modes later.',
-      500,
-    );
-    await queueAgentMessage(
-      "Now, let's get started! Which type of node would you like to set up?",
-      500,
-    );
-    insertNodeOptions();
-  }, [availableTypes.length, conversationStarted, insertNodeOptions, queueAgentMessage]);
-
-  useEffect(() => {
-    startConversation();
-  }, [availableTypes.length, startConversation]);
-
-  useEffect(() => {
-    const loadTypes = async () => {
-      try {
-        const types = await invoke('get_available_node_types');
-        if (Array.isArray(types)) {
-          setAvailableTypes(types);
-        } else {
-          setAvailableTypes([]);
-        }
-      } catch (err) {
-        console.error('Failed to load node types:', err);
-        queueAgentMessage('Failed to load node types. Please restart the control panel.', 1000);
-      }
-    };
-    loadTypes();
-  }, [queueAgentMessage]);
-
-  useEffect(() => {
-    const checkNetwork = async () => {
-      try {
-        await invoke('init_network_discovery');
-        const status = await invoke('get_network_peers');
-        if (status.bootstrap_nodes_reachable === 0) {
-          await queueAgentMessage(
-            'Network check note: bootstrap nodes are currently unreachable, but local user-operated setup can still proceed.',
-            1000,
-          );
-        } else {
-          await queueAgentMessage(
-            `Optional network check: ${status.bootstrap_nodes_reachable}/${status.bootstrap_nodes_total} bootstrap endpoints reachable.`,
-            1000,
-          );
-        }
-      } catch (err) {
-        console.warn('Network check failed:', err);
-        await queueAgentMessage(
-          'Optional network check could not be completed. Local user-operated setup can still continue.',
-          1000,
-        );
-      }
-    };
-    checkNetwork();
-  }, [queueAgentMessage]);
-
-  useEffect(() => {
-    let unlisten = null;
-    listen('setup-progress', (event) => {
-      const payload = event?.payload || {};
-      if (typeof payload.progress !== 'number') {
-        return;
-      }
-      setProgress(payload.progress);
-      setSetupInProgress(true);
-
-      const eventMessage = payload.message || payload.step || 'Progress update';
-      const isError = payload.step?.includes('-failed') ||
-        eventMessage.toLowerCase().includes('error') ||
-        eventMessage.toLowerCase().includes('failed');
-
-      if (isError) {
-        setNetworkError(eventMessage);
-        addMessage(`[ERROR] ${eventMessage}`, 'agent');
-      } else {
-        addMessage(`[${payload.progress}%] ${eventMessage}`, 'agent');
-      }
-    }).then((fn) => {
-      unlisten = fn;
-    });
-
-    let unlistenTerminal = null;
-    listen('terminal-output', (event) => {
-      const payload = event?.payload || {};
-      const line = payload.line || '';
-      const type = payload.type || 'info';
-
-      if (line && !line.includes('[%]')) {
-        if (type === 'error') {
-          setNetworkError(line);
-        }
-        addMessage(line, 'agent');
-      }
-    }).then((fn) => {
-      unlistenTerminal = fn;
-    });
-
-    return () => {
-      if (unlisten) unlisten();
-      if (unlistenTerminal) unlistenTerminal();
-    };
+  const resetWizardState = useCallback(() => {
+    setMachine01Host('');
+    setDeviceCount(0);
+    setDeviceHosts([]);
+    setCurrentDeviceIndex(0);
+    setConfiguredMachineIds([]);
+    setHaltedAction(null);
+    setSnapshotSummary(null);
+    setPhase('await_machine01_host');
+    addMessage('jarvis', 'Restarting setup. Enter the reachable SSH host/IP for machine-01.');
   }, [addMessage]);
 
-  const handleRestartSetup = useCallback(() => {
-    setMessages([]);
-    setSelectedType(null);
-    setNodeNickname('');
-    setCurrentStep(StepStates.Idle);
-    setConversationStarted(false);
-    setProgress(0);
-    setSetupInProgress(false);
-    setNetworkError(null);
-    setUserInput('');
-    agentQueueRef.current = Promise.resolve();
-  }, []);
-
-  const resolveType = useCallback((input) => {
-    const normalized = input.toLowerCase();
-    return availableTypes.find(
-      (type) =>
-        type.compatible &&
-        (type.id.toLowerCase() === normalized || type.display_name.toLowerCase() === normalized),
-    );
-  }, [availableTypes]);
-
-  const handleTypeSelection = useCallback(async (type, includeUserMessage = true) => {
-    if (!type || !type.compatible || setupInProgress) {
-      return;
-    }
-    if (includeUserMessage) {
-      addMessage(`I want to set up the ${type.display_name} node.`, 'user');
-    }
-    setSelectedType(type);
-    setNodeNickname('');
-    setCurrentStep(StepStates.ConfirmType);
-    await queueAgentMessage(
-      `The ${type.display_name} role ${type.description}. Are you sure you want to continue with this type? Please reply "yes" or "no".`,
-      900,
-    );
-  }, [addMessage, queueAgentMessage, setupInProgress]);
-
-  const startNodeSetup = useCallback(async (nicknameOverride) => {
-    if (!selectedType) {
-      queueAgentMessage('No node type selected. Please choose a node type to continue.', 800);
-      return;
-    }
-    const displayName = nicknameOverride || nodeNickname || selectedType.display_name;
-    setSetupInProgress(true);
-    setProgress(0);
-    setCurrentStep(StepStates.Setup);
-    await queueAgentMessage('Starting deterministic setup...', 900);
+  const bootstrap = useCallback(async () => {
+    setRunning(true);
     try {
-      const recipePath = `recipes/${selectedType.id}.yml`;
-      const nodeId = await invoke('agent_setup_node', {
-        recipePath,
-        displayName,
-        setupOptions: {
-          userOperated: true,
-          autoStart: true,
+      const workspace = await invoke('agent_monitor_initialize_workspace');
+      const machines = await invoke('agent_get_inventory_machines');
+
+      const orderedMachines = sortMachineIds(machines.map((entry) => entry.machine_id));
+      setWorkspacePath(String(workspace || ''));
+      setInventory(Array.isArray(machines) ? machines : []);
+
+      addMessage('jarvis', "Hello. I'm Jarvis, your Devnet Setup Agent.");
+      addMessage(
+        'jarvis',
+        `I will orchestrate closed-devnet setup for this fleet. Inventory loaded with ${orderedMachines.length} machine slots.`,
+      );
+      addMessage(
+        'jarvis',
+        `First target sequence on machine-01 is ${formatSequence(WG_BOOTSTRAP_SEQUENCE)}.`,
+      );
+      addMessage(
+        'jarvis',
+        'Step 1: enter the reachable SSH host/IP for machine-01 (public/LAN address, not 10.50.0.x).',
+      );
+      setPhase('await_machine01_host');
+    } catch (error) {
+      addMessage('jarvis', `Initialization failed: ${String(error)}`);
+      setPhase('error');
+    } finally {
+      setRunning(false);
+    }
+  }, [addMessage]);
+
+  useEffect(() => {
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+    bootstrap();
+  }, [bootstrap]);
+
+  const runNodeAction = useCallback(
+    async (machineId, action) => {
+      try {
+        const result = await invoke('monitor_node_control', { machineId, action });
+        const success = Boolean(result?.success);
+        const statusLabel = success ? 'OK' : 'FAILED';
+        addMessage('jarvis', `${machineId}: ${action} -> ${statusLabel}`);
+
+        const stdoutPreview = truncateText(result?.stdout);
+        if (stdoutPreview) {
+          addMessage('jarvis', stdoutPreview, 'code');
+        }
+
+        if (!success) {
+          const stderrPreview = truncateText(result?.stderr || 'No stderr captured.');
+          setHaltedAction({
+            machineId,
+            action,
+            command: String(result?.command || ''),
+            reason: stderrPreview,
+          });
+          addMessage(
+            'jarvis',
+            `Action halted on ${machineId}:${action}. Run the command manually, then click "I Ran It Manually" to continue.`,
+          );
+        }
+
+        return success;
+      } catch (error) {
+        const reason = String(error);
+        setHaltedAction({
+          machineId,
+          action,
+          command: '',
+          reason,
+        });
+        addMessage('jarvis', `${machineId}: ${action} could not execute in-app: ${reason}`);
+        return false;
+      }
+    },
+    [addMessage],
+  );
+
+  const runSequenceForMachine = useCallback(
+    async (machineId, sequence, label) => {
+      addMessage('jarvis', `Running ${label} on ${machineId}: ${formatSequence(sequence)}`);
+      for (const action of sequence) {
+        const ok = await runNodeAction(machineId, action);
+        if (!ok) {
+          return false;
+        }
+      }
+      return true;
+    },
+    [addMessage, runNodeAction],
+  );
+
+  const applyPlan = useCallback(async () => {
+    if (!assignmentPlan.length) {
+      addMessage('jarvis', 'No assignment plan is available yet.');
+      return;
+    }
+
+    const invalidHost = assignmentPlan.find((entry) => entry.machineIds.length > 0 && !entry.host);
+    if (invalidHost) {
+      addMessage('jarvis', `Missing host for ${invalidHost.deviceLabel}. Provide all device hosts first.`);
+      return;
+    }
+
+    const machineMappings = assignmentPlan.flatMap((entry) =>
+      entry.machineIds.map((machineId) => ({
+        machine_id: machineId,
+        host: entry.host,
+        ssh_user: defaults.sshUser,
+        ssh_port: Number(defaults.sshPort || 22),
+        ssh_key_path: defaults.sshKeyPath,
+        remote_dir: `${defaults.remoteRoot}/${machineId}`,
+        wg_interface: defaults.wgInterface,
+      })),
+    );
+
+    if (!machineMappings.length) {
+      addMessage('jarvis', 'No machine mappings were generated from the current plan.');
+      return;
+    }
+
+    setRunning(true);
+    setHaltedAction(null);
+
+    try {
+      addMessage('jarvis', 'Applying hosts.env connection mappings...');
+      const hostsPath = await invoke('agent_prepare_hosts_env', {
+        input: {
+          global_ssh_user: defaults.sshUser,
+          global_ssh_port: Number(defaults.sshPort || 22),
+          global_ssh_key_path: defaults.sshKeyPath,
+          atlas_base_url: defaults.atlasBaseUrl,
+          machines: machineMappings,
         },
       });
-      await queueAgentMessage(`Setup complete! Your node ID is ${nodeId}.`, 1000);
-      await queueAgentMessage('Thank you for your patience; I am getting you on over to the node dashboard now.');
-      setSetupInProgress(false);
-      setCurrentStep(StepStates.Completed);
-      if (onComplete) {
-        onComplete(nodeId);
-      }
-    } catch (err) {
-      console.error('agent_setup_node failed', err);
-      await queueAgentMessage(`Setup failed: ${err}. Let's start over.`, 1000);
-      setSetupInProgress(false);
-      setSelectedType(null);
-      setNodeNickname('');
-      setCurrentStep(StepStates.AwaitType);
-      insertNodeOptions();
-    }
-  }, [nodeNickname, onComplete, queueAgentMessage, selectedType, insertNodeOptions]);
+      addMessage('jarvis', `Updated hosts config: ${String(hostsPath)}`);
 
-  const handleSubmit = useCallback(async (event) => {
-    event.preventDefault();
-    const input = userInput.trim();
-    if (!input) {
-      return;
-    }
-    addMessage(input, 'user');
-    setUserInput('');
-
-    if (setupInProgress) {
-      queueAgentMessage('Setup is already in progress. Please wait until it finishes.', 800);
-      return;
-    }
-
-    const normalized = input.toLowerCase();
-
-    if (currentStep === StepStates.AwaitType) {
-      const chosen = resolveType(input);
-      if (!chosen) {
-        queueAgentMessage('Please select a node type from the cards above.', 800);
+      addMessage('jarvis', 'Generating WireGuard mesh configs (keys + peer configs)...');
+      const meshResult = await invoke('agent_generate_wireguard_mesh');
+      if (!meshResult?.success) {
+        setHaltedAction({
+          machineId: 'local-control',
+          action: 'generate_wireguard_mesh',
+          command: String(meshResult?.command || ''),
+          reason: truncateText(meshResult?.stderr || meshResult?.stdout || 'Mesh generation failed.'),
+        });
+        addMessage(
+          'jarvis',
+          'WireGuard mesh generation failed locally. Install local WireGuard tools if missing, run the command shown, then continue.',
+        );
+        setConfiguredMachineIds(machineMappings.map((entry) => entry.machine_id));
+        setPhase('ready_actions');
         return;
       }
-      await handleTypeSelection(chosen, false);
+
+      addMessage('jarvis', 'WireGuard mesh artifacts generated successfully.');
+
+      const configuredIds = sortMachineIds(machineMappings.map((entry) => entry.machine_id));
+      setConfiguredMachineIds(configuredIds);
+
+      if (configuredIds.includes('machine-01')) {
+        const ok = await runSequenceForMachine('machine-01', WG_BOOTSTRAP_SEQUENCE, 'WireGuard bootstrap');
+        if (!ok) {
+          setPhase('ready_actions');
+          return;
+        }
+        addMessage('jarvis', 'machine-01 WireGuard bootstrap completed.');
+      }
+
+      addMessage(
+        'jarvis',
+        'Base setup complete. Use the action buttons to run WireGuard/provisioning across all assigned machines.',
+      );
+      setPhase('ready_actions');
+    } catch (error) {
+      addMessage('jarvis', `Apply step failed: ${String(error)}`);
+      setPhase('ready_actions');
+    } finally {
+      setRunning(false);
+    }
+  }, [addMessage, assignmentPlan, defaults, runSequenceForMachine]);
+
+  const runWireguardAll = useCallback(async () => {
+    const targets = configuredMachineIds.length
+      ? configuredMachineIds
+      : sortMachineIds(assignmentPlan.flatMap((entry) => entry.machineIds));
+
+    if (!targets.length) {
+      addMessage('jarvis', 'No configured machine targets available. Apply setup plan first.');
       return;
     }
 
-    if (currentStep === StepStates.ConfirmType) {
-      if (!selectedType) {
-        queueAgentMessage('You need to pick a node type before confirming.', 800);
+    setRunning(true);
+    setHaltedAction(null);
+    try {
+      for (const machineId of targets) {
+        const ok = await runSequenceForMachine(machineId, WG_BOOTSTRAP_SEQUENCE, 'WireGuard setup');
+        if (!ok) {
+          addMessage('jarvis', 'WireGuard fleet run paused on failure. Resolve and retry.');
+          return;
+        }
+      }
+      addMessage('jarvis', 'WireGuard sequence completed across all assigned machines.');
+    } finally {
+      setRunning(false);
+    }
+  }, [addMessage, assignmentPlan, configuredMachineIds, runSequenceForMachine]);
+
+  const runProvisionAll = useCallback(async () => {
+    const targets = configuredMachineIds.length
+      ? configuredMachineIds
+      : sortMachineIds(assignmentPlan.flatMap((entry) => entry.machineIds));
+
+    if (!targets.length) {
+      addMessage('jarvis', 'No configured machine targets available. Apply setup plan first.');
+      return;
+    }
+
+    setRunning(true);
+    setHaltedAction(null);
+    try {
+      for (const machineId of targets) {
+        const ok = await runSequenceForMachine(machineId, PROVISION_SEQUENCE, 'Node provision/start');
+        if (!ok) {
+          addMessage('jarvis', 'Provisioning paused on failure. Resolve and retry.');
+          return;
+        }
+      }
+      addMessage('jarvis', 'Provision + start sequence completed across assigned machines.');
+    } finally {
+      setRunning(false);
+    }
+  }, [addMessage, assignmentPlan, configuredMachineIds, runSequenceForMachine]);
+
+  const refreshFleetStatus = useCallback(async () => {
+    setRunning(true);
+    try {
+      const snapshot = await invoke('get_monitor_snapshot');
+      const summary = {
+        total: Number(snapshot?.total_nodes || 0),
+        online: Number(snapshot?.online_nodes || 0),
+        offline: Number(snapshot?.offline_nodes || 0),
+        syncing: Number(snapshot?.syncing_nodes || 0),
+        highestBlock: snapshot?.highest_block ?? 'N/A',
+      };
+      setSnapshotSummary(summary);
+      addMessage(
+        'jarvis',
+        `Fleet snapshot: online ${summary.online}/${summary.total}, offline ${summary.offline}, syncing ${summary.syncing}, highest block ${summary.highestBlock}.`,
+      );
+    } catch (error) {
+      addMessage('jarvis', `Snapshot refresh failed: ${String(error)}`);
+    } finally {
+      setRunning(false);
+    }
+  }, [addMessage]);
+
+  const handleSend = useCallback(
+    async (event) => {
+      event.preventDefault();
+      const value = input.trim();
+      if (!value || running) return;
+
+      addMessage('user', value);
+      setInput('');
+
+      if (phase === 'await_machine01_host') {
+        setMachine01Host(value);
+        setDeviceHosts([value]);
+        setCurrentDeviceIndex(0);
+        setPhase('await_device_count');
+        addMessage('jarvis', 'Now enter the number of physical devices to configure (each gets up to 2 node slots).');
         return;
       }
-      if (normalized.startsWith('y')) {
-        setCurrentStep(StepStates.NicknamePrompt);
-        queueAgentMessage('Would you like to give your node a nickname? Reply with "yes" or "no".', 800);
-      } else {
-        setSelectedType(null);
-        queueAgentMessage('No problem — let me show the available node types again.', 800);
-        insertNodeOptions();
+
+      if (phase === 'await_device_count') {
+        const parsed = Number.parseInt(value, 10);
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          addMessage('jarvis', 'Enter a valid device count (integer >= 1).');
+          return;
+        }
+
+        setDeviceCount(parsed);
+        const nextHosts = Array.from({ length: parsed }, () => '');
+        nextHosts[0] = machine01Host;
+        setDeviceHosts(nextHosts);
+
+        if (parsed === 1) {
+          setPhase('review');
+          addMessage('jarvis', 'Single-device plan prepared. Reply "yes" to apply setup, or "no" to restart.');
+        } else {
+          setCurrentDeviceIndex(1);
+          setPhase('await_device_hosts');
+          if (parsed === 8) {
+            addMessage(
+              'jarvis',
+              '8-device topology detected. I will use fixed placement: machine-01 only on device-01, then validator+secondary pairings across devices 02-08.',
+            );
+          }
+          addMessage('jarvis', `Enter reachable SSH host/IP for device-02.`);
+        }
+        return;
       }
-      return;
-    }
 
-    if (currentStep === StepStates.NicknamePrompt) {
-      if (normalized.startsWith('y')) {
-        setCurrentStep(StepStates.AwaitNickname);
-        queueAgentMessage('What would you like to name your node?', 800);
-      } else {
-        startNodeSetup();
+      if (phase === 'await_device_hosts') {
+        const next = [...deviceHosts];
+        next[currentDeviceIndex] = value;
+        setDeviceHosts(next);
+
+        const nextIndex = currentDeviceIndex + 1;
+        if (nextIndex >= deviceCount) {
+          setPhase('review');
+          addMessage('jarvis', 'All device hosts collected. Reply "yes" to apply setup, or "no" to restart.');
+        } else {
+          setCurrentDeviceIndex(nextIndex);
+          addMessage('jarvis', `Enter reachable SSH host/IP for device-${String(nextIndex + 1).padStart(2, '0')}.`);
+        }
+        return;
       }
-      return;
-    }
 
-    if (currentStep === StepStates.AwaitNickname) {
-      setNodeNickname(input);
-      startNodeSetup(input);
-      return;
-    }
+      if (phase === 'review') {
+        if (isAffirmative(value)) {
+          await applyPlan();
+          return;
+        }
+        if (isNegative(value)) {
+          resetWizardState();
+          return;
+        }
+        addMessage('jarvis', 'Reply "yes" to apply setup now, or "no" to restart.');
+        return;
+      }
 
-    queueAgentMessage('Please select a node type from the list above to continue.', 800);
-  }, [addMessage, currentStep, handleTypeSelection, insertNodeOptions, nodeNickname, queueAgentMessage, resolveType, setupInProgress, selectedType, startNodeSetup, userInput]);
+      if (phase === 'ready_actions') {
+        if (isNegative(value)) {
+          resetWizardState();
+          return;
+        }
+        addMessage('jarvis', 'Use the action buttons below for fleet operations, or type "restart" to rerun onboarding.');
+      }
+    },
+    [
+      addMessage,
+      applyPlan,
+      currentDeviceIndex,
+      deviceCount,
+      deviceHosts,
+      input,
+      machine01Host,
+      phase,
+      resetWizardState,
+      running,
+    ],
+  );
+
+  const machinePlanLines = assignmentPlan
+    .filter((entry) => entry.machineIds.length > 0)
+    .map((entry) => {
+      const roleSummary = entry.machineIds
+        .map((machineId) => {
+          const machine = inventoryByMachineId.get(machineId);
+          if (!machine) return machineId;
+          return `${machineId} (${machine.role}/${machine.node_type})`;
+        })
+        .join(', ');
+      return `${entry.deviceLabel} [${entry.host || 'missing-host'}] => ${roleSummary}`;
+    });
 
   return (
-    <div
-      className="jarvis-agent"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100vh',
-        padding: '20px',
-        gap: '12px',
-        color: 'var(--snrg-text-primary)',
-        background: 'var(--snrg-bg-gradient-mesh)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <img
-          src="/snrg.gif"
-          alt="Synergy"
-          style={{ width: '32px', height: '32px', borderRadius: '50%' }}
-        />
-        <div style={{ fontWeight: 600, color: 'var(--snrg-text-secondary)' }}>
-          Jarvis — Synergy Setup Assistant
+    <section className="jarvis-shell">
+      <div className="jarvis-toolbar">
+        <div>
+          <h2>Jarvis Devnet Setup Agent</h2>
+          <p className="monitor-path">
+            Workspace:
+            {' '}
+            <code>{workspacePath || 'Not initialized'}</code>
+          </p>
+          <p className="monitor-path">
+            Phase:
+            {' '}
+            <strong>{phase}</strong>
+          </p>
+        </div>
+        <div className="jarvis-toolbar-actions">
+          <button className="monitor-btn" onClick={refreshFleetStatus} disabled={running}>
+            Refresh Fleet Status
+          </button>
+          <button className="monitor-btn" onClick={resetWizardState} disabled={running}>
+            Restart Wizard
+          </button>
         </div>
       </div>
 
-      <div
-        className="messages"
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          background: 'var(--snrg-bg-glass)',
-          border: '1px solid var(--snrg-border-neutral)',
-          borderRadius: '12px',
-          padding: '16px',
-          backdropFilter: 'blur(6px)',
-          boxShadow: 'var(--snrg-glow-quad)',
-        }}
-      >
-        {messages.map((msg, idx) => (
-          <div
-            key={`${msg.sender}-${idx}-${msg.type || 'text'}`}
-            className={`message ${msg.sender}`}
-          >
-            <div
-              className={`message-content ${msg.type === 'node-options' ? 'node-options-content' : ''}`}
-            >
-              {msg.type === 'node-options' ? (
-                <div>
-                  <p style={{ margin: '0 0 0.75rem 0' }}>{msg.text}</p>
-                  <div className="node-options-grid">
-                    {Object.entries(msg.payload?.groups || {}).map(([groupName, types]) => (
-                      <div key={groupName} className="node-options-group">
-                        <div className="node-options-group-title">{groupName}</div>
-                        <div className="node-options-card-grid">
-                          {types.map((type) => (
-                            <button
-                              key={type.id}
-                              type="button"
-                              className={`node-option-card ${selectedType?.id === type.id ? 'selected' : ''}`}
-                              onClick={() => handleTypeSelection(type)}
-                              disabled={!type.compatible || setupInProgress}
-                            >
-                              <div className="node-option-title">{type.display_name}</div>
-                              <div className="node-option-id">{type.id}</div>
-                              <div className="node-option-desc">{type.description}</div>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <p style={{ margin: 0 }}>{msg.text}</p>
-              )}
-            </div>
-          </div>
-        ))}
-        {isTyping && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px' }}>
-            <img
-              src="/snrg.gif"
-              alt="typing"
-              style={{ width: '22px', height: '22px', borderRadius: '50%' }}
+      <div className="jarvis-grid">
+        <article className="monitor-panel jarvis-config-panel">
+          <h3>Operator Defaults</h3>
+          <p className="monitor-path">Set once, then Jarvis applies these to all assigned machine slots.</p>
+          <div className="monitor-form-grid">
+            <input
+              value={defaults.sshUser}
+              onChange={(event) => setDefaults((prev) => ({ ...prev, sshUser: event.target.value }))}
+              placeholder="SSH user"
             />
-            <div className="typing-indicator">
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
+            <input
+              value={defaults.sshPort}
+              onChange={(event) => setDefaults((prev) => ({ ...prev, sshPort: event.target.value }))}
+              placeholder="SSH port"
+            />
+            <input
+              value={defaults.sshKeyPath}
+              onChange={(event) => setDefaults((prev) => ({ ...prev, sshKeyPath: event.target.value }))}
+              placeholder="SSH key path"
+            />
+            <input
+              value={defaults.remoteRoot}
+              onChange={(event) => setDefaults((prev) => ({ ...prev, remoteRoot: event.target.value }))}
+              placeholder="Remote node root"
+            />
+            <input
+              value={defaults.wgInterface}
+              onChange={(event) => setDefaults((prev) => ({ ...prev, wgInterface: event.target.value }))}
+              placeholder="WireGuard interface"
+            />
+            <input
+              value={defaults.atlasBaseUrl}
+              onChange={(event) => setDefaults((prev) => ({ ...prev, atlasBaseUrl: event.target.value }))}
+              placeholder="Atlas base URL"
+            />
           </div>
-        )}
-        {networkError && !setupInProgress && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              padding: '16px',
-              marginTop: '12px',
-              background: 'rgba(239, 68, 68, 0.1)',
-              border: '1px solid rgba(239, 68, 68, 0.3)',
-              borderRadius: '8px',
-            }}
-          >
-            <span style={{ color: 'var(--snrg-error)', fontSize: '0.9rem' }}>
-              Setup encountered an issue: {networkError}
-            </span>
-            <button
-              onClick={handleRestartSetup}
-              style={{
-                padding: '8px 16px',
-                borderRadius: '8px',
-                border: 'none',
-                background: 'var(--snrg-primary-gradient-horizontal)',
-                color: 'var(--snrg-text-primary)',
-                cursor: 'pointer',
-                fontWeight: 600,
-                fontSize: '0.85rem',
-              }}
-            >
-              Restart Setup
+
+          <h3>Current Assignment Plan</h3>
+          <p className="monitor-path">Target: 2 nodes per physical device where inventory capacity allows.</p>
+          <div className="jarvis-plan-list">
+            {machinePlanLines.length ? (
+              machinePlanLines.map((line) => <p key={line}>{line}</p>)
+            ) : (
+              <p>No plan yet. Follow Jarvis chat prompts.</p>
+            )}
+          </div>
+
+          <div className="jarvis-action-row">
+            <button className="monitor-btn monitor-btn-primary" onClick={applyPlan} disabled={running || phase === 'booting'}>
+              Apply Plan + Bootstrap machine-01
+            </button>
+            <button className="monitor-btn" onClick={runWireguardAll} disabled={running || !assignmentPlan.length}>
+              WireGuard All Assigned
+            </button>
+            <button className="monitor-btn" onClick={runProvisionAll} disabled={running || !assignmentPlan.length}>
+              Provision + Start All Assigned
             </button>
           </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
 
-      <div
-        className="progress-container"
-        style={{ marginTop: '0.25rem' }}
-      >
-        <div
-          style={{
-            background: 'var(--snrg-bg-elevated)',
-            borderRadius: '6px',
-            height: '10px',
-            overflow: 'hidden',
-          }}
-        >
-          <div
-            style={{
-              width: `${progress}%`,
-              height: '10px',
-              background: 'var(--snrg-primary-gradient-horizontal)',
-              transition: 'width 0.3s ease',
-            }}
-          ></div>
-        </div>
-        <div style={{ marginTop: '0.25rem', fontSize: '0.9rem' }}>{progress}%</div>
-      </div>
+          {snapshotSummary ? (
+            <div className="monitor-error-box jarvis-snapshot-box">
+              <strong>Fleet Status:</strong>
+              {' '}
+              {`online ${snapshotSummary.online}/${snapshotSummary.total}, offline ${snapshotSummary.offline}, syncing ${snapshotSummary.syncing}, highest block ${snapshotSummary.highestBlock}`}
+            </div>
+          ) : null}
 
-      <form
-        onSubmit={handleSubmit}
-        className="input-form"
-        style={{
-          display: 'flex',
-          gap: '8px',
-          alignItems: 'center',
-        }}
-      >
-        <input
-          type="text"
-          value={userInput}
-          onChange={(e) => setUserInput(e.target.value)}
-          placeholder="Type your response..."
-          disabled={setupInProgress}
-          style={{
-            flex: 1,
-            padding: '10px 12px',
-            borderRadius: '10px',
-            border: '1px solid var(--snrg-border-neutral)',
-            background: 'var(--snrg-bg-glass-light)',
-            color: 'var(--snrg-text-primary)',
-            outline: 'none',
-          }}
-        />
-        <button
-          type="submit"
-          disabled={setupInProgress}
-          style={{
-            padding: '10px 16px',
-            borderRadius: '10px',
-            border: 'none',
-            background: setupInProgress
-              ? 'var(--snrg-border-neutral-strong)'
-              : 'var(--snrg-primary-gradient-horizontal)',
-            color: 'var(--snrg-text-primary)',
-            cursor: setupInProgress ? 'not-allowed' : 'pointer',
-            fontWeight: 600,
-          }}
-        >
-          Send
-        </button>
-      </form>
-    </div>
+          {haltedAction ? (
+            <div className="monitor-error-box jarvis-halt-box">
+              <strong>
+                Manual step required:
+                {' '}
+                {haltedAction.machineId}
+                {' / '}
+                {haltedAction.action}
+              </strong>
+              <p>{haltedAction.reason}</p>
+              {haltedAction.command ? <pre>{haltedAction.command}</pre> : null}
+              <div className="jarvis-action-row">
+                <button
+                  className="monitor-btn"
+                  onClick={async () => {
+                    setRunning(true);
+                    let ok = false;
+                    if (
+                      haltedAction.machineId === 'local-control'
+                      && haltedAction.action === 'generate_wireguard_mesh'
+                    ) {
+                      try {
+                        const meshResult = await invoke('agent_generate_wireguard_mesh');
+                        ok = Boolean(meshResult?.success);
+                        if (!ok) {
+                          addMessage(
+                            'jarvis',
+                            `Local mesh retry failed: ${truncateText(meshResult?.stderr || meshResult?.stdout)}`,
+                          );
+                        }
+                      } catch (error) {
+                        addMessage('jarvis', `Local mesh retry failed: ${String(error)}`);
+                      }
+                    } else {
+                      ok = await runNodeAction(haltedAction.machineId, haltedAction.action);
+                    }
+                    if (ok) {
+                      setHaltedAction(null);
+                      addMessage('jarvis', 'Retry succeeded.');
+                    }
+                    setRunning(false);
+                  }}
+                  disabled={running}
+                >
+                  Retry In App
+                </button>
+                <button
+                  className="monitor-btn"
+                  onClick={() => {
+                    addMessage('jarvis', 'Manual step acknowledged. Continuing from current state.');
+                    setHaltedAction(null);
+                  }}
+                  disabled={running}
+                >
+                  I Ran It Manually
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </article>
+
+        <article className="monitor-panel jarvis-chat-panel">
+          <h3>Jarvis Chat</h3>
+          <div className="jarvis-chat-log">
+            {messages.map((message) => (
+              <div key={message.id} className={`jarvis-chat-message jarvis-${message.sender}`}>
+                <span className="jarvis-chat-author">{message.sender === 'user' ? 'You' : 'Jarvis'}</span>
+                {message.type === 'code' ? <pre>{message.text}</pre> : <p>{message.text}</p>}
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+
+          <form className="jarvis-chat-form" onSubmit={handleSend}>
+            <input
+              type="text"
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="Type response for Jarvis..."
+              disabled={running || phase === 'booting' || phase === 'error'}
+            />
+            <button type="submit" className="monitor-btn monitor-btn-primary" disabled={running || !input.trim()}>
+              Send
+            </button>
+          </form>
+        </article>
+      </div>
+    </section>
   );
 }
 

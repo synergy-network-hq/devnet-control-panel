@@ -1,10 +1,23 @@
-import React from 'react';
-import { useLocation } from 'react-router-dom';
+import React, { useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { openHelpWindow } from '../lib/helpWindow';
+import { checkAndInstallAppUpdate } from '../lib/appUpdater';
 
 function Layout({ children }) {
   const location = useLocation();
   const onHelpRoute = location.pathname === '/help';
+  const onSettingsRoute = location.pathname === '/settings';
+  const onJarvisRoute = location.pathname === '/jarvis';
+  const [updateStatus, setUpdateStatus] = useState('');
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+
+  const onCheckUpdates = async () => {
+    setCheckingUpdates(true);
+    setUpdateStatus('Checking for updates...');
+    const result = await checkAndInstallAppUpdate();
+    setUpdateStatus(result.message);
+    setCheckingUpdates(false);
+  };
 
   return (
     <div className="app-container">
@@ -22,6 +35,19 @@ function Layout({ children }) {
           </div>
 
           <div className="header-right-controls">
+            <Link className="btn-header" to={onJarvisRoute ? '/' : '/jarvis'}>
+              {onJarvisRoute ? 'Dashboard' : 'Jarvis'}
+            </Link>
+            <Link className="btn-header" to={onSettingsRoute ? '/' : '/settings'}>
+              {onSettingsRoute ? 'Dashboard' : 'Settings'}
+            </Link>
+            <button
+              className="btn-header"
+              onClick={onCheckUpdates}
+              disabled={checkingUpdates}
+            >
+              {checkingUpdates ? 'Checking...' : 'Check Updates'}
+            </button>
             <button className="btn-header btn-help" onClick={openHelpWindow}>
               {onHelpRoute ? 'Help Window' : 'Help'}
             </button>
@@ -30,6 +56,7 @@ function Layout({ children }) {
       </header>
       <main className="app-main">{children}</main>
       <footer className="app-footer">
+        {updateStatus ? <span>{updateStatus}</span> : null}
         <span className="footer-copyright">© 2026 Synergy Network Devnet Operations</span>
         <span className="footer-version">Monitor v1.0.0</span>
       </footer>

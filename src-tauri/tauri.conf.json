@@ -51,5 +51,11 @@
       "../scripts/reset-devnet.sh",
       "../guides/NETWORK_NODE_MONITOR_USER_MANUAL.md"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [],
+      "pubkey": ""
+    }
   }
 }

@@ -38,14 +38,17 @@ fn setup_panic_hook() {
     }));
 }
 
-use crate::agent::agent_setup_node;
+use crate::agent::{
+    agent_generate_wireguard_mesh, agent_get_inventory_machines, agent_monitor_initialize_workspace,
+    agent_prepare_hosts_env, agent_setup_node,
+};
 use crate::monitor::{
     get_monitor_inventory_path, get_monitor_node_details, get_monitor_security_state,
-    get_monitor_snapshot, get_monitor_workspace_path, monitor_assign_machine_ssh_profile,
-    monitor_bulk_node_control, monitor_delete_operator, monitor_delete_ssh_profile,
-    monitor_export_node_data, monitor_initialize_workspace, monitor_node_control,
-    monitor_remove_machine_ssh_profile, monitor_set_active_operator, monitor_upsert_operator,
-    monitor_upsert_ssh_profile,
+    get_monitor_snapshot, get_monitor_user_manual_markdown, get_monitor_workspace_path,
+    monitor_assign_machine_ssh_profile, monitor_bulk_node_control, monitor_delete_operator,
+    monitor_delete_ssh_profile, monitor_export_node_data, monitor_initialize_workspace,
+    monitor_node_control, monitor_remove_machine_ssh_profile, monitor_set_active_operator,
+    monitor_upsert_operator, monitor_upsert_ssh_profile,
 };
 use crate::node_manager::monitoring::MonitoringService;
 use blockchain::BlockchainService;
@@ -90,6 +93,7 @@ async fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             if let Err(error) = crate::monitor::ensure_monitor_workspace(&app.handle().clone()) {
                 eprintln!("monitor workspace initialization warning: {error}");
@@ -148,6 +152,10 @@ async fn main() {
             save_node_config,
             reload_node_config,
             agent_setup_node,
+            agent_monitor_initialize_workspace,
+            agent_get_inventory_machines,
+            agent_prepare_hosts_env,
+            agent_generate_wireguard_mesh,
             // Network discovery commands
             init_network_discovery,
             get_network_peers,
@@ -167,6 +175,7 @@ async fn main() {
             // Monitoring-only commands for remote 15-node devnet view
             get_monitor_inventory_path,
             get_monitor_workspace_path,
+            get_monitor_user_manual_markdown,
             monitor_initialize_workspace,
             get_monitor_snapshot,
             get_monitor_node_details,

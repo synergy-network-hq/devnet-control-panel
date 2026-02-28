@@ -280,6 +280,26 @@ pub fn get_monitor_workspace_path() -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn get_monitor_user_manual_markdown() -> Result<String, String> {
+    let workspace = resolve_monitor_workspace_path()?;
+    let manual_path = workspace.join(MONITOR_USER_MANUAL_RELATIVE);
+    if !manual_path.is_file() {
+        return Err(format!(
+            "User manual not found at {}. Run monitor_initialize_workspace and ensure bundled resources include {}.",
+            manual_path.display(),
+            MONITOR_USER_MANUAL_RELATIVE
+        ));
+    }
+
+    fs::read_to_string(&manual_path).map_err(|error| {
+        format!(
+            "Failed to read user manual {}: {error}",
+            manual_path.display()
+        )
+    })
+}
+
+#[tauri::command]
 pub fn monitor_initialize_workspace(app_handle: AppHandle) -> Result<String, String> {
     let workspace = ensure_monitor_workspace(&app_handle)?;
     Ok(workspace.to_string_lossy().to_string())
@@ -2890,20 +2910,10 @@ fn shell_quote(value: &str) -> String {
 const MONITOR_WORKSPACE_ENV: &str = "SYNERGY_MONITOR_WORKSPACE";
 const MONITOR_SECURITY_CONFIG_RELATIVE: &str = "config/security.json";
 const MONITOR_AUDIT_LOG_RELATIVE: &str = "audit/control-actions.jsonl";
+const MONITOR_USER_MANUAL_RELATIVE: &str = "guides/NETWORK_NODE_MONITOR_USER_MANUAL.md";
 
 pub fn ensure_monitor_workspace(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
-    fs::create_dir_all(&app_data_dir).map_err(|error| {
-        format!(
-            "Failed to create app data directory {}: {error}",
-            app_data_dir.display()
-        )
-    })?;
-
-    let workspace_root = app_data_dir.join("monitor-workspace");
+    let workspace_root = preferred_workspace_root();
     fs::create_dir_all(&workspace_root).map_err(|error| {
         format!(
             "Failed to create monitor workspace {}: {error}",
@@ -2917,6 +2927,7 @@ pub fn ensure_monitor_workspace(app_handle: &AppHandle) -> Result<PathBuf, Strin
         workspace_root.to_string_lossy().to_string(),
     );
 
+    migrate_legacy_workspace_if_needed(app_handle, &workspace_root)?;
     extract_bundled_resources_to_workspace(app_handle, &workspace_root)?;
     ensure_security_config_exists(&workspace_root)?;
 
@@ -2929,6 +2940,43 @@ pub fn ensure_monitor_workspace(app_handle: &AppHandle) -> Result<PathBuf, Strin
     }
 
     Ok(workspace_root)
+}
+
+fn preferred_workspace_root() -> PathBuf {
+    dirs::home_dir()
+        .or_else(dirs::data_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".synergy-node-monitor")
+        .join("monitor-workspace")
+}
+
+fn legacy_workspace_root(app_handle: &AppHandle) -> Option<PathBuf> {
+    app_handle
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|path| path.join("monitor-workspace"))
+}
+
+fn migrate_legacy_workspace_if_needed(
+    app_handle: &AppHandle,
+    workspace_root: &Path,
+) -> Result<(), String> {
+    let Some(legacy_root) = legacy_workspace_root(app_handle) else {
+        return Ok(());
+    };
+
+    if legacy_root == workspace_root || !legacy_root.is_dir() {
+        return Ok(());
+    }
+
+    let target_inventory = workspace_root.join("devnet/lean15/node-inventory.csv");
+    if target_inventory.is_file() {
+        return Ok(());
+    }
+
+    copy_directory_recursive(&legacy_root, workspace_root)?;
+    Ok(())
 }
 
 fn extract_bundled_resources_to_workspace(
@@ -2957,6 +3005,16 @@ fn extract_bundled_resources_to_workspace(
             let destination = workspace_root.join(relative);
             copy_path_if_missing_or_directory(&source, &destination)?;
         }
+    }
+
+    // Always refresh the user manual so Help content updates for existing installs.
+    if let Some(source) = roots
+        .iter()
+        .map(|root| root.join(MONITOR_USER_MANUAL_RELATIVE))
+        .find(|candidate| candidate.exists())
+    {
+        let destination = workspace_root.join(MONITOR_USER_MANUAL_RELATIVE);
+        copy_file_force(&source, &destination)?;
     }
 
     let hosts_env = workspace_root.join("devnet/lean15/hosts.env");
@@ -3058,6 +3116,33 @@ fn copy_path_if_missing_or_directory(source: &Path, destination: &Path) -> Resul
     Ok(())
 }
 
+fn copy_file_force(source: &Path, destination: &Path) -> Result<(), String> {
+    if !source.is_file() {
+        return Err(format!(
+            "Expected file source but found non-file path: {}",
+            source.display()
+        ));
+    }
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create destination parent directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    fs::copy(source, destination).map_err(|error| {
+        format!(
+            "Failed to copy {} to {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    Ok(())
+}
+
 fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(), String> {
     fs::create_dir_all(destination).map_err(|error| {
         format!(
@@ -3113,11 +3198,7 @@ fn resolve_monitor_workspace_path() -> Result<PathBuf, String> {
         }
     }
 
-    let default = dirs::data_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("synergy-node-monitor")
-        .join("monitor-workspace");
+    let default = preferred_workspace_root();
     fs::create_dir_all(&default).map_err(|error| {
         format!(
             "Failed to create default monitor workspace {}: {error}",

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 INVENTORY_FILE="$ROOT_DIR/devnet/lean15/node-inventory.csv"
+HOSTS_ENV_FILE="${SYNERGY_MONITOR_HOSTS_ENV:-$ROOT_DIR/devnet/lean15/hosts.env}"
 OUT_DIR="${1:-$ROOT_DIR/devnet/lean15/wireguard}"
 KEYS_DIR="$OUT_DIR/keys"
 CONFIGS_DIR="$OUT_DIR/configs"
@@ -30,12 +31,22 @@ if [[ ! -f "$INVENTORY_FILE" ]]; then
   exit 1
 fi
 
+if [[ -f "$HOSTS_ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$HOSTS_ENV_FILE"
+fi
+
 if ! command -v wg >/dev/null 2>&1; then
   echo "WireGuard tooling not found. Install 'wg' first." >&2
   exit 1
 fi
 
 mkdir -p "$KEYS_DIR" "$CONFIGS_DIR"
+
+resolve_var() {
+  local name="$1"
+  printf '%s' "${!name:-}"
+}
 
 machines=()
 vpn_ips=()
@@ -48,6 +59,21 @@ while IFS=, read -r machine_id _ _ _ _ _ _ _ _ _ _ host vpn_ip _ _ _ || [[ -n "$
   if [[ -z "$machine_id" || -z "$vpn_ip" ]]; then
     continue
   fi
+
+  machine_id="${machine_id//$'\r'/}"
+  host="${host//$'\r'/}"
+  vpn_ip="${vpn_ip//$'\r'/}"
+
+  machine_key="$(printf '%s' "$machine_id" | tr '[:lower:]-' '[:upper:]_')"
+  host_override_var="${machine_key}_HOST"
+  host_override="$(resolve_var "$host_override_var")"
+  if [[ -n "$host_override" ]]; then
+    host="$host_override"
+  fi
+  if [[ -z "$host" ]]; then
+    host="$vpn_ip"
+  fi
+
   machines+=("$machine_id")
   vpn_ips+=("$vpn_ip")
   hosts+=("$host")
