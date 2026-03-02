@@ -116,12 +116,12 @@ fi
 
 WG_INTERFACE="$(resolve_var "$WG_INTERFACE_VAR")"
 if [[ -z "$WG_INTERFACE" ]]; then
-  WG_INTERFACE="synergy-devnet"
+  WG_INTERFACE="${SYNERGY_DEVNET_WG_INTERFACE:-wg0}"
 fi
 
 WG_REMOTE_CONF="$(resolve_var "$WG_REMOTE_CONF_VAR")"
 if [[ -z "$WG_REMOTE_CONF" ]]; then
-  WG_REMOTE_CONF="/etc/wireguard/${WG_INTERFACE}.conf"
+  WG_REMOTE_CONF="${SYNERGY_DEVNET_WG_REMOTE_CONF:-/etc/wireguard/${WG_INTERFACE}.conf}"
 fi
 
 if [[ -z "$HOST" ]]; then
@@ -209,6 +209,44 @@ remote_run_script() {
   else
     ssh "${SSH_ARGS[@]}" "$REMOTE_TARGET" "bash -s" <<<"$script"
   fi
+}
+
+resolve_remote_wireguard_interface() {
+  local desired_interface="$1"
+  local resolved_interface
+
+  resolved_interface="$(
+    remote_run_script "
+set -euo pipefail
+desired='$desired_interface'
+if ! command -v wg >/dev/null 2>&1; then
+  printf '%s\n' \"\$desired\"
+  exit 0
+fi
+interfaces=\$(wg show interfaces 2>/dev/null || true)
+if [[ -z \"\$interfaces\" ]]; then
+  if [[ \"\$desired\" == \"synergy-devnet\" ]]; then
+    printf 'wg0\n'
+  else
+    printf '%s\n' \"\$desired\"
+  fi
+  exit 0
+fi
+if printf '%s' \"\$interfaces\" | tr ' ' '\n' | grep -Fxq \"\$desired\"; then
+  printf '%s\n' \"\$desired\"
+elif printf '%s' \"\$interfaces\" | tr ' ' '\n' | grep -Fxq 'wg0'; then
+  printf 'wg0\n'
+else
+  printf '%s\n' \"\$(printf '%s' \"\$interfaces\" | tr ' ' '\n' | sed '/^$/d' | head -n1)\"
+fi
+" 2>/dev/null | tr -d '\r' | tail -n1
+  )"
+
+  if [[ -z "$resolved_interface" ]]; then
+    resolved_interface="$desired_interface"
+  fi
+
+  printf '%s' "$resolved_interface"
 }
 
 copy_to_remote() {
@@ -318,8 +356,15 @@ wireguard_connect() {
     exit 1
   fi
 
+  local wg_interface_effective
+  wg_interface_effective="$(resolve_remote_wireguard_interface "$WG_INTERFACE")"
+  local wg_remote_conf_effective="$WG_REMOTE_CONF"
+  if [[ "$WG_REMOTE_CONF" == "/etc/wireguard/${WG_INTERFACE}.conf" ]]; then
+    wg_remote_conf_effective="/etc/wireguard/${wg_interface_effective}.conf"
+  fi
+
   local remote_tmp_conf
-  remote_tmp_conf="/tmp/${MACHINE_ID}-${WG_INTERFACE}.conf"
+  remote_tmp_conf="/tmp/${MACHINE_ID}-${wg_interface_effective}.conf"
   copy_to_remote "$WG_CONFIG_FILE" "$remote_tmp_conf"
 
   remote_run_script "
@@ -330,42 +375,55 @@ if ! command -v wg-quick >/dev/null 2>&1; then
 fi
 if command -v sudo >/dev/null 2>&1; then
   sudo mkdir -p /etc/wireguard
-  sudo install -m 600 '$remote_tmp_conf' '$WG_REMOTE_CONF'
-  sudo wg-quick down '$WG_INTERFACE' >/dev/null 2>&1 || true
-  sudo wg-quick up '$WG_INTERFACE'
-  sudo wg show '$WG_INTERFACE' || true
+  sudo install -m 600 '$remote_tmp_conf' '$wg_remote_conf_effective'
+  sudo wg-quick down '$wg_interface_effective' >/dev/null 2>&1 || true
+  sudo wg-quick up '$wg_interface_effective'
+  sudo wg show '$wg_interface_effective' || true
 else
   mkdir -p /etc/wireguard
-  install -m 600 '$remote_tmp_conf' '$WG_REMOTE_CONF'
-  wg-quick down '$WG_INTERFACE' >/dev/null 2>&1 || true
-  wg-quick up '$WG_INTERFACE'
-  wg show '$WG_INTERFACE' || true
+  install -m 600 '$remote_tmp_conf' '$wg_remote_conf_effective'
+  wg-quick down '$wg_interface_effective' >/dev/null 2>&1 || true
+  wg-quick up '$wg_interface_effective'
+  wg show '$wg_interface_effective' || true
 fi
 rm -f '$remote_tmp_conf'
 "
+
+  WG_INTERFACE="$wg_interface_effective"
+  WG_REMOTE_CONF="$wg_remote_conf_effective"
 }
 
 wireguard_disconnect() {
+  local wg_interface_effective
+  wg_interface_effective="$(resolve_remote_wireguard_interface "$WG_INTERFACE")"
+
   remote_run_script "
 set -euo pipefail
 if command -v sudo >/dev/null 2>&1; then
-  sudo wg-quick down '$WG_INTERFACE' >/dev/null 2>&1 || true
+  sudo wg-quick down '$wg_interface_effective' >/dev/null 2>&1 || true
 else
-  wg-quick down '$WG_INTERFACE' >/dev/null 2>&1 || true
+  wg-quick down '$wg_interface_effective' >/dev/null 2>&1 || true
 fi
-echo 'WireGuard interface $WG_INTERFACE is down.'
+echo 'WireGuard interface $wg_interface_effective is down.'
 "
+
+  WG_INTERFACE="$wg_interface_effective"
 }
 
 wireguard_status() {
+  local wg_interface_effective
+  wg_interface_effective="$(resolve_remote_wireguard_interface "$WG_INTERFACE")"
+
   remote_run_script "
 set -euo pipefail
 if command -v sudo >/dev/null 2>&1; then
-  sudo wg show '$WG_INTERFACE' || true
+  sudo wg show '$wg_interface_effective' || true
 else
-  wg show '$WG_INTERFACE' || true
+  wg show '$wg_interface_effective' || true
 fi
 "
+
+  WG_INTERFACE="$wg_interface_effective"
 }
 
 export_logs() {

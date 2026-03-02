@@ -32,6 +32,9 @@ SYNERGY_DEVNET_SSH_USER=ops
 SYNERGY_DEVNET_SSH_PORT=22
 # Optional global SSH private key path:
 # SYNERGY_DEVNET_SSH_KEY=/Users/you/.ssh/id_ed25519
+# Optional global WireGuard defaults:
+# SYNERGY_DEVNET_WG_INTERFACE=wg0
+# SYNERGY_DEVNET_WG_REMOTE_CONF=/etc/wireguard/wg0.conf
 
 # Explorer bridge used by node monitor Atlas links:
 ATLAS_BASE_URL=https://devnet-explorer.synergy-network.io
@@ -57,8 +60,8 @@ ${machine_key}_SSH_USER=ops
 ${machine_key}_SSH_PORT=22
 # ${machine_key}_SSH_KEY=
 # ${machine_key}_REMOTE_DIR=/opt/synergy/$machine_id
-# ${machine_key}_WG_INTERFACE=synergy-devnet
-# ${machine_key}_WG_REMOTE_CONF=/etc/wireguard/synergy-devnet.conf
+# ${machine_key}_WG_INTERFACE=wg0
+# ${machine_key}_WG_REMOTE_CONF=/etc/wireguard/wg0.conf
 
 ${machine_key}_START_CMD="$ORCHESTRATOR_SCRIPT $machine_id start"
 ${machine_key}_STOP_CMD="$ORCHESTRATOR_SCRIPT $machine_id stop"

@@ -1111,6 +1111,40 @@ pub fn monitor_apply_eight_machine_topology(app_handle: AppHandle) -> Result<Str
         apply_topology_to_installer_node_toml(&installer_dir.join("config/node.toml"), vpn_ip)?;
     }
 
+    // Rebuild installer bundles so existing workspaces receive updated installer script logic
+    // (for example, sudo privilege caching behavior on Ubuntu). This is best-effort:
+    // setup must still proceed when cross-platform build artifacts are unavailable.
+    let build_installers_script = workspace.join("scripts/devnet15/build-node-installers.sh");
+    let mut rebuild_warning: Option<String> = None;
+    if build_installers_script.is_file() {
+        match ProcessCommand::new("bash")
+            .arg(build_installers_script.to_string_lossy().to_string())
+            .current_dir(&workspace)
+            .output()
+        {
+            Ok(output) => {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    if stderr.is_empty() {
+                        rebuild_warning = Some(
+                            "installer rebuild step failed; using bundled installer templates"
+                                .to_string(),
+                        );
+                    } else {
+                        rebuild_warning = Some(format!(
+                            "installer rebuild skipped ({stderr}); using bundled installer templates"
+                        ));
+                    }
+                }
+            }
+            Err(error) => {
+                rebuild_warning = Some(format!(
+                    "installer rebuild skipped ({error}); using bundled installer templates"
+                ));
+            }
+        }
+    }
+
     let script_path = workspace.join("scripts/devnet15/generate-monitor-hosts-env.sh");
     let hosts_env_path = workspace.join("devnet/lean15/hosts.env");
     if script_path.is_file() {
@@ -1128,10 +1162,15 @@ pub fn monitor_apply_eight_machine_topology(app_handle: AppHandle) -> Result<Str
         }
     }
 
-    Ok(format!(
+    let mut message = format!(
         "Applied 8-machine topology mapping to {} and installer configs; hosts.env refreshed.",
         inventory_path.display()
-    ))
+    );
+    if let Some(warning) = rebuild_warning {
+        message.push(' ');
+        message.push_str(&warning);
+    }
+    Ok(message)
 }
 
 #[tauri::command]
@@ -2610,30 +2649,16 @@ fn resolve_control_commands(
             )
         };
 
-        if commands.start.is_none() {
-            commands.start = Some(command_for("start"));
-        }
-        if commands.stop.is_none() {
-            commands.stop = Some(command_for("stop"));
-        }
-        if commands.restart.is_none() {
-            commands.restart = Some(command_for("restart"));
-        }
-        if commands.status.is_none() {
-            commands.status = Some(command_for("status"));
-        }
-        if commands.setup.is_none() {
-            commands.setup = Some(command_for("setup_node"));
-        }
-        if commands.export_logs.is_none() {
-            commands.export_logs = Some(command_for("export_logs"));
-        }
-        if commands.view_chain_data.is_none() {
-            commands.view_chain_data = Some(command_for("view_chain_data"));
-        }
-        if commands.export_chain_data.is_none() {
-            commands.export_chain_data = Some(command_for("export_chain_data"));
-        }
+        // Always prefer the runtime-resolved orchestrator path so hosts.env does not pin
+        // control actions to stale absolute paths from a different OS/machine.
+        commands.start = Some(command_for("start"));
+        commands.stop = Some(command_for("stop"));
+        commands.restart = Some(command_for("restart"));
+        commands.status = Some(command_for("status"));
+        commands.setup = Some(command_for("setup_node"));
+        commands.export_logs = Some(command_for("export_logs"));
+        commands.view_chain_data = Some(command_for("view_chain_data"));
+        commands.export_chain_data = Some(command_for("export_chain_data"));
 
         let default_custom_actions = [
             ("install_node", "install_node"),
@@ -2650,8 +2675,7 @@ fn resolve_control_commands(
         for (action_key, operation) in default_custom_actions {
             commands
                 .custom_actions
-                .entry(action_key.to_string())
-                .or_insert_with(|| command_for(operation));
+                .insert(action_key.to_string(), command_for(operation));
         }
     }
 
@@ -3335,6 +3359,7 @@ fn extract_bundled_resources_to_workspace(
     let always_refresh = [
         "scripts/devnet15/remote-node-orchestrator.sh",
         "scripts/devnet15/generate-monitor-hosts-env.sh",
+        "scripts/devnet15/build-node-installers.sh",
         "scripts/devnet15/render-configs.sh",
         "scripts/devnet15/reset-devnet.sh",
     ];
@@ -3347,6 +3372,17 @@ fn extract_bundled_resources_to_workspace(
             let destination = workspace_root.join(relative);
             copy_file_force(&source, &destination)?;
         }
+    }
+
+    // Always refresh installer control scripts so existing workspaces receive
+    // fixes in install/start behavior even when full installer regeneration is skipped.
+    if let Some(source_installers) = roots
+        .iter()
+        .map(|root| root.join("devnet/lean15/installers"))
+        .find(|candidate| candidate.is_dir())
+    {
+        let destination_installers = workspace_root.join("devnet/lean15/installers");
+        refresh_installer_control_scripts(&source_installers, &destination_installers)?;
     }
 
     let hosts_env = workspace_root.join("devnet/lean15/hosts.env");
@@ -3510,6 +3546,85 @@ fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(), Str
                     destination_path.display()
                 )
             })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn refresh_installer_control_scripts(
+    source_installers: &Path,
+    destination_installers: &Path,
+) -> Result<(), String> {
+    fs::create_dir_all(destination_installers).map_err(|error| {
+        format!(
+            "Failed to create installers directory {}: {error}",
+            destination_installers.display()
+        )
+    })?;
+
+    let entries = fs::read_dir(source_installers).map_err(|error| {
+        format!(
+            "Failed to read installers directory {}: {error}",
+            source_installers.display()
+        )
+    })?;
+
+    let script_names = [
+        "install_and_start.sh",
+        "nodectl.sh",
+        "install_and_start.ps1",
+        "nodectl.ps1",
+    ];
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Failed to read installer entry in {}: {error}",
+                source_installers.display()
+            )
+        })?;
+        let source_machine_dir = entry.path();
+        if !source_machine_dir.is_dir() {
+            continue;
+        }
+
+        let destination_machine_dir = destination_installers.join(entry.file_name());
+        fs::create_dir_all(&destination_machine_dir).map_err(|error| {
+            format!(
+                "Failed to create destination installer directory {}: {error}",
+                destination_machine_dir.display()
+            )
+        })?;
+
+        for script_name in script_names {
+            let source_script = source_machine_dir.join(script_name);
+            if !source_script.is_file() {
+                continue;
+            }
+
+            let destination_script = destination_machine_dir.join(script_name);
+            copy_file_force(&source_script, &destination_script)?;
+
+            #[cfg(unix)]
+            if script_name.ends_with(".sh") {
+                use std::os::unix::fs::PermissionsExt;
+                let mut permissions = fs::metadata(&destination_script)
+                    .map_err(|error| {
+                        format!(
+                            "Failed to read script metadata {}: {error}",
+                            destination_script.display()
+                        )
+                    })?
+                    .permissions();
+                permissions.set_mode(0o755);
+                fs::set_permissions(&destination_script, permissions).map_err(|error| {
+                    format!(
+                        "Failed to set script permissions {}: {error}",
+                        destination_script.display()
+                    )
+                })?;
+            }
         }
     }
 

@@ -111,7 +111,7 @@ function JarvisAgentSetup() {
     sshPort: '22',
     sshKeyPath: '~/.ssh/id_ed25519',
     remoteRoot: '/opt/synergy',
-    wgInterface: 'synergy-devnet',
+    wgInterface: 'wg0',
     atlasBaseUrl: 'https://devnet-explorer.synergy-network.io',
   });
 

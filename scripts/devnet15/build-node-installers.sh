@@ -170,6 +170,8 @@ OUT_FILE="$LOG_DIR/node.out"
 NETWORK_TRANSPORT="${NETWORK_TRANSPORT:-wireguard}"
 WIREGUARD_INTERFACE="${WIREGUARD_INTERFACE:-wg0}"
 VPN_CIDR="${VPN_CIDR:-10.50.0.0/24}"
+PRIVILEGED_HELPER=""
+SUDO_KEEPALIVE_PID=""
 
 select_binary() {
   local os arch
@@ -189,25 +191,57 @@ select_binary() {
   chmod +x "$BIN_SELECTED"
 }
 
-run_privileged() {
-  if [[ "$(id -u)" -eq 0 ]]; then
-    "$@"
-  elif [[ -t 0 ]] && command -v sudo >/dev/null 2>&1; then
-    # Interactive terminal - use regular sudo
-    sudo "$@"
-  elif [[ -n "${DISPLAY:-}" ]] && command -v pkexec >/dev/null 2>&1; then
-    # GUI environment - use pkexec for GUI password prompt
-    pkexec "$@"
-  elif command -v sudo >/dev/null 2>&1; then
-    # Fallback: try sudo (may prompt if cached, or fail gracefully)
-    sudo "$@" 2>/dev/null || {
-      echo "Note: Firewall configuration requires sudo privileges. Configure passwordless sudo or run manually." >&2
-      return 1
-    }
-  else
-    echo "Privilege escalation unavailable for: $*" >&2
-    return 1
+cleanup_privileged_helper() {
+  if [[ -n "$SUDO_KEEPALIVE_PID" ]]; then
+    kill "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
   fi
+}
+
+prepare_privileged_helper() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    PRIVILEGED_HELPER="root"
+    return 0
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    if sudo -n true >/dev/null 2>&1; then
+      PRIVILEGED_HELPER="sudo"
+      return 0
+    fi
+
+    if [[ -t 0 || -t 1 ]]; then
+      echo "Requesting sudo authentication once for firewall configuration..."
+      if sudo -v; then
+        PRIVILEGED_HELPER="sudo"
+        (
+          while true; do
+            sudo -n true >/dev/null 2>&1 || exit
+            sleep 45
+          done
+        ) &
+        SUDO_KEEPALIVE_PID="$!"
+        return 0
+      fi
+    fi
+  fi
+
+  PRIVILEGED_HELPER="none"
+  echo "Warning: No cached sudo privilege available. Firewall rules will be skipped. Run 'sudo -v' once before setup to enable firewall automation." >&2
+  return 0
+}
+
+run_privileged() {
+  case "$PRIVILEGED_HELPER" in
+    root)
+      "$@"
+      ;;
+    sudo)
+      sudo -n "$@"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 open_ports_ufw() {
@@ -261,22 +295,35 @@ open_ports() {
     return
   fi
 
+  local firewall_backend=""
+  if command -v ufw >/dev/null 2>&1; then
+    firewall_backend="ufw"
+  elif command -v firewall-cmd >/dev/null 2>&1; then
+    firewall_backend="firewalld"
+  elif command -v iptables >/dev/null 2>&1; then
+    firewall_backend="iptables"
+  else
+    echo "No supported firewall tool detected. Open these TCP ports manually:"
+    echo "$P2P_PORT, $RPC_PORT, $WS_PORT, $GRPC_PORT, $DISCOVERY_PORT"
+    return
+  fi
+
+  trap cleanup_privileged_helper EXIT
+  prepare_privileged_helper
+
   if [[ "$NETWORK_TRANSPORT" == "wireguard" ]]; then
     echo "WireGuard mode: allowing node ports only from $VPN_CIDR on interface $WIREGUARD_INTERFACE..."
   fi
 
-  if command -v ufw >/dev/null 2>&1; then
+  if [[ "$firewall_backend" == "ufw" ]]; then
     echo "Opening ports via ufw..."
     open_ports_ufw
-  elif command -v firewall-cmd >/dev/null 2>&1; then
+  elif [[ "$firewall_backend" == "firewalld" ]]; then
     echo "Opening ports via firewalld..."
     open_ports_firewalld
-  elif command -v iptables >/dev/null 2>&1; then
+  elif [[ "$firewall_backend" == "iptables" ]]; then
     echo "Opening ports via iptables..."
     open_ports_iptables
-  else
-    echo "No supported firewall tool detected. Open these TCP ports manually:"
-    echo "$P2P_PORT, $RPC_PORT, $WS_PORT, $GRPC_PORT, $DISCOVERY_PORT"
   fi
 }
 

@@ -1,7 +1,7 @@
 Synergy Devnet Binary Status
 ============================
 
-Generated At: 2026-02-26T18:59:13Z
+Generated At: 2026-03-02T15:47:57Z
 
 Linux Binary
 ------------
@@ -12,8 +12,8 @@ SHA-256: b634227e3516dfc76d6f967d3f247e6d0b8eb0e2133cc2eaef30e68695415eaa
 Darwin Binary
 -------------
 Path: ./bin/synergy-devnet-darwin-arm64
-Source: fresh-local-build(target/release/synergy-devnet)
-SHA-256: 9870e46e653a3f7bad582202c28fec05e0eddbf14055bd6eb89f5e5e3e7a9da1
+Source: fallback-prebuilt(binaries/synergy-devnet-darwin-arm64)
+SHA-256: b63f31cb8299773866631d023de7254f61fb64755710283927a1369318f064a3
 
 Windows Binary
 --------------
