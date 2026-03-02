@@ -1,0 +1,96 @@
+# Synergy Devnet Quick Reference
+
+## Network Configuration
+
+- **Chain ID**: 338638
+- **P2P Port**: 38638
+- **RPC Port**: 48638
+- **WebSocket Port**: 58638
+- **Metrics Port**: 9090
+
+## Endpoints
+
+- **Core RPC**: https://devnet-core-rpc.synergy-network.io
+- **Core WebSocket**: wss://devnet-core-ws.synergy-network.io
+- **EVM RPC**: https://devnet-evm-rpc.synergy-network.io
+- **EVM WebSocket**: wss://devnet-evm-ws.synergy-network.io
+- **API**: https://devnet-api.synergy-network.io
+- **Explorer**: https://devnet-explorer.synergy-network.io
+- **Indexer**: https://devnet-indexer.synergy-network.io
+- **Faucet**: https://devnet-faucet.synergy-network.io
+
+## Bootnodes
+
+### Bootnode 1
+- **Address**: `synv11lylxla8qjcrk3ef8gjlyyhew3z4mjswwwsn6zv`
+- **P2P**: `snr://synv11lylxla8qjcrk3ef8gjlyyhew3z4mjswwwsn6zv@bootnode1.synergy-network.io:38638`
+- **Config**: `config/bootnode1.toml` or `config/node_config.toml`
+- **Keys**: `config/bootnode1/identity.json`
+
+### Bootnode 2
+- **Address**: `synv11csyhf60yd6gp8n4wflz99km29g7fh8guxrmu04`
+- **P2P**: `snr://synv11csyhf60yd6gp8n4wflz99km29g7fh8guxrmu04@bootnode2.synergy-network.io:38638`
+- **Config**: `config/bootnode2.toml`
+- **Keys**: `config/bootnode2/identity.json`
+
+### Bootnode 3
+- **Address**: `synv110y3fuyvqmjdp02j6m6y2rceqjp2dexwu3p6np4`
+- **P2P**: `snr://synv110y3fuyvqmjdp02j6m6y2rceqjp2dexwu3p6np4@bootnode3.synergy-network.io:38638`
+- **Config**: `config/bootnode3.toml`
+- **Keys**: `config/bootnode3/identity.json`
+
+## Wallets
+
+### Faucet
+- **Address**: `synw1lfgerdqglc6p74p9u6k8ghfssl59q8jzhuwm07`
+- **Balance**: 2,000,000,000 SNRG (2 Billion)
+- **Keys**: `config/faucet/identity.json`
+
+### Treasury (DAO)
+- **Address**: `synw14lswrh8z7kremft633xym9wtr5l9vkm3rd6lvd`
+- **Balance**: 9,997,000,000 SNRG (9.997 Billion)
+- **Keys**: `config/treasury/identity.json`
+
+## Cluster
+
+- **Cluster ID**: `syngrp116xlcwtcuwd8cdkqrftdww5dpqvm699uanux4mc`
+- **Name**: Devnet Bootstrap Cluster
+- **Class**: 1 (Consensus Nodes)
+
+## Network
+
+- **Total Supply**: 12,000,000,000 SNRG
+- **Burn Address**: `synergy00000000000000000000000burn`
+- **Chain ID**: `synergy-devnet`
+
+## Quick Commands
+
+```bash
+# Start primary bootnode
+./devnet.sh start validator
+
+# Check status
+./devnet.sh status
+
+# View logs
+./devnet.sh logs
+
+# Clean and reset
+./devnet.sh clean
+
+# Build project
+./devnet.sh build
+```
+
+## Generate New Address
+
+```bash
+# Validator address
+./target/release/synergy-address-engine --node-type validator
+
+# Wallet address
+./target/release/synergy-address-engine --node-type wallet
+
+# Cluster address
+./target/release/synergy-address-engine --node-type cluster1
+```

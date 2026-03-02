@@ -1,0 +1,26 @@
+{
+    "version": "devnet-2025-01",
+    "binaries": {
+      "darwin-arm64": {
+        "url": "https://devnet.synergy-network.io/binaries/synergy-devnet-darwin-arm64",
+        "checksum": "PUT_REAL_SHA256_HERE"
+      },
+      "darwin-amd64": {
+        "url": "https://devnet.synergy-network.io/binaries/synergy-devnet-darwin-amd64",
+        "checksum": "PUT_REAL_SHA256_HERE"
+      },
+      "linux-amd64": {
+        "url": "https://devnet.synergy-network.io/binaries/synergy-devnet-linux-amd64",
+        "checksum": "PUT_REAL_SHA256_HERE"
+      },
+      "linux-arm64": {
+        "url": "https://devnet.synergy-network.io/binaries/synergy-devnet-linux-arm64",
+        "checksum": "PUT_REAL_SHA256_HERE"
+      },
+      "windows-amd64": {
+        "url": "https://devnet.synergy-network.io/binaries/synergy-devnet-windows-amd64.exe",
+        "checksum": "PUT_REAL_SHA256_HERE"
+      }
+    }
+  }
+  
