@@ -58,7 +58,7 @@ function HelpArticlesPage() {
       <div className="help-hero">
         <div>
           <p className="help-eyebrow">Synergy Devnet Operator Manual</p>
-          <h2>Network Node Monitor Help Center</h2>
+          <h2>Synergy Devnet Control Center Help Center</h2>
           <p className="help-hero-copy">
             This view is rendered directly from the bundled
             {' '}

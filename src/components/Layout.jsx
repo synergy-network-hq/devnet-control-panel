@@ -7,7 +7,6 @@ function Layout({ children }) {
   const location = useLocation();
   const onHelpRoute = location.pathname === '/help';
   const onSettingsRoute = location.pathname === '/settings';
-  const onJarvisRoute = location.pathname === '/jarvis';
   const [updateStatus, setUpdateStatus] = useState('');
   const [checkingUpdates, setCheckingUpdates] = useState(false);
 
@@ -30,14 +29,11 @@ function Layout({ children }) {
                 alt="Synergy Logo"
                 className="logo-icon-bg"
               />
-              <span className="brand-title">Synergy Node Monitor</span>
+              <span className="brand-title">Synergy Devnet Control Center</span>
             </div>
           </div>
 
           <div className="header-right-controls">
-            <Link className="btn-header" to={onJarvisRoute ? '/' : '/jarvis'}>
-              {onJarvisRoute ? 'Dashboard' : 'Jarvis'}
-            </Link>
             <Link className="btn-header" to={onSettingsRoute ? '/' : '/settings'}>
               {onSettingsRoute ? 'Dashboard' : 'Settings'}
             </Link>
@@ -58,7 +54,7 @@ function Layout({ children }) {
       <footer className="app-footer">
         {updateStatus ? <span>{updateStatus}</span> : null}
         <span className="footer-copyright">© 2026 Synergy Network Devnet Operations</span>
-        <span className="footer-version">Monitor v1.0.0</span>
+        <span className="footer-version">Control Center v1.0.0</span>
       </footer>
     </div>
   );

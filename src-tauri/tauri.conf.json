@@ -1,6 +1,6 @@
 {
   "$schema": "https://schemas.tauri.app/config.schema.json",
-  "productName": "Synergy Node Monitor",
+  "productName": "Synergy Devnet Control Center",
   "version": "1.0.0",
   "identifier": "com.synergy.node-monitor",
   "build": {
@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Synergy Node Monitor",
+        "title": "Synergy Devnet Control Center",
         "width": 1200,
         "height": 850,
         "minWidth": 800,

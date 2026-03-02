@@ -259,6 +259,35 @@ pub struct MonitorBulkControlResult {
     pub results: Vec<MonitorControlResult>,
 }
 
+const EIGHT_MACHINE_LOGICAL_VPN: [(&str, &str); 15] = [
+    ("machine-01", "10.50.0.1"),
+    ("machine-02", "10.50.0.2"),
+    ("machine-03", "10.50.0.3"),
+    ("machine-04", "10.50.0.4"),
+    ("machine-05", "10.50.0.5"),
+    ("machine-06", "10.50.0.4"),
+    ("machine-07", "10.50.0.3"),
+    ("machine-08", "10.50.0.6"),
+    ("machine-09", "10.50.0.7"),
+    ("machine-10", "10.50.0.5"),
+    ("machine-11", "10.50.0.6"),
+    ("machine-12", "10.50.0.8"),
+    ("machine-13", "10.50.0.7"),
+    ("machine-14", "10.50.0.8"),
+    ("machine-15", "10.50.0.2"),
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorTerminalCommandResult {
+    pub success: bool,
+    pub exit_code: i32,
+    pub command: String,
+    pub cwd: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub executed_at_utc: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MonitorSecurityConfig {
     version: u32,
@@ -865,6 +894,108 @@ pub async fn monitor_node_control(
     }
 
     execute_monitor_node_control(&machine_id, &normalized_action, &operator, "single").await
+}
+
+#[tauri::command]
+pub fn monitor_run_terminal_command(
+    command: String,
+    cwd: Option<String>,
+) -> Result<MonitorTerminalCommandResult, String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err("command is required".to_string());
+    }
+
+    let effective_cwd = if let Some(candidate) = cwd
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        let path = PathBuf::from(candidate);
+        if !path.is_dir() {
+            return Err(format!("cwd does not exist or is not a directory: {candidate}"));
+        }
+        path
+    } else {
+        std::env::current_dir().map_err(|error| format!("Failed to resolve current dir: {error}"))?
+    };
+
+    let mut process = if cfg!(target_os = "windows") {
+        let mut cmd = ProcessCommand::new("cmd");
+        cmd.arg("/C").arg(trimmed);
+        cmd
+    } else {
+        let mut cmd = ProcessCommand::new("bash");
+        cmd.arg("-lc").arg(trimmed);
+        cmd
+    };
+
+    let output = process
+        .current_dir(&effective_cwd)
+        .output()
+        .map_err(|error| format!("Failed to execute command '{trimmed}': {error}"))?;
+
+    let success = output.status.success();
+    let exit_code = output
+        .status
+        .code()
+        .unwrap_or(if success { 0 } else { 1 });
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    Ok(MonitorTerminalCommandResult {
+        success,
+        exit_code,
+        command: trimmed.to_string(),
+        cwd: effective_cwd.to_string_lossy().to_string(),
+        stdout: truncate_text(stdout.trim_end(), 50000),
+        stderr: truncate_text(stderr.trim_end(), 50000),
+        executed_at_utc: Utc::now().to_rfc3339(),
+    })
+}
+
+#[tauri::command]
+pub fn monitor_apply_eight_machine_topology(app_handle: AppHandle) -> Result<String, String> {
+    let workspace = ensure_monitor_workspace(&app_handle)?;
+    let mapping = EIGHT_MACHINE_LOGICAL_VPN
+        .iter()
+        .map(|(machine, vpn)| (machine.to_string(), vpn.to_string()))
+        .collect::<HashMap<String, String>>();
+
+    let inventory_path = workspace.join("devnet/lean15/node-inventory.csv");
+    apply_topology_to_inventory(&inventory_path, &mapping)?;
+
+    let installers_dir = workspace.join("devnet/lean15/installers");
+    for (machine_id, vpn_ip) in &mapping {
+        let installer_dir = installers_dir.join(machine_id);
+        if !installer_dir.is_dir() {
+            continue;
+        }
+        apply_topology_to_installer_node_env(&installer_dir.join("node.env"), vpn_ip)?;
+        apply_topology_to_installer_node_toml(&installer_dir.join("config/node.toml"), vpn_ip)?;
+    }
+
+    let script_path = workspace.join("scripts/devnet15/generate-monitor-hosts-env.sh");
+    let hosts_env_path = workspace.join("devnet/lean15/hosts.env");
+    if script_path.is_file() {
+        let output = ProcessCommand::new("bash")
+            .arg(script_path.to_string_lossy().to_string())
+            .arg(hosts_env_path.to_string_lossy().to_string())
+            .current_dir(&workspace)
+            .output()
+            .map_err(|error| format!("Failed to regenerate hosts.env: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "generate-monitor-hosts-env.sh failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+    }
+
+    Ok(format!(
+        "Applied 8-machine topology mapping to {} and installer configs; hosts.env refreshed.",
+        inventory_path.display()
+    ))
 }
 
 #[tauri::command]
@@ -3207,6 +3338,181 @@ fn resolve_monitor_workspace_path() -> Result<PathBuf, String> {
     })?;
     std::env::set_var(MONITOR_WORKSPACE_ENV, default.to_string_lossy().to_string());
     Ok(default)
+}
+
+fn apply_topology_to_inventory(
+    inventory_path: &Path,
+    mapping: &HashMap<String, String>,
+) -> Result<(), String> {
+    let content = fs::read_to_string(inventory_path).map_err(|error| {
+        format!(
+            "Failed to read node inventory {}: {error}",
+            inventory_path.display()
+        )
+    })?;
+    let mut lines = content.lines();
+    let header_line = lines
+        .next()
+        .ok_or_else(|| format!("Inventory file is empty: {}", inventory_path.display()))?;
+    let headers = header_line
+        .split(',')
+        .map(|value| value.trim().to_string())
+        .collect::<Vec<_>>();
+
+    let resolve_index = |name: &str| -> Result<usize, String> {
+        headers
+            .iter()
+            .position(|value| value.eq_ignore_ascii_case(name))
+            .ok_or_else(|| format!("Column '{name}' missing in {}", inventory_path.display()))
+    };
+
+    let machine_idx = resolve_index("machine_id")?;
+    let host_idx = resolve_index("host")?;
+    let vpn_idx = resolve_index("vpn_ip")?;
+
+    let mut rewritten = Vec::new();
+    rewritten.push(header_line.to_string());
+
+    for row in lines {
+        if row.trim().is_empty() {
+            continue;
+        }
+        let mut values = row
+            .split(',')
+            .map(|value| value.trim().trim_end_matches('\r').to_string())
+            .collect::<Vec<_>>();
+        if let Some(machine_id) = values.get(machine_idx).cloned() {
+            if let Some(vpn_ip) = mapping.get(&machine_id) {
+                if host_idx < values.len() {
+                    values[host_idx] = vpn_ip.clone();
+                }
+                if vpn_idx < values.len() {
+                    values[vpn_idx] = vpn_ip.clone();
+                }
+            }
+        }
+        rewritten.push(values.join(","));
+    }
+
+    let mut encoded = rewritten.join("\n");
+    if !encoded.ends_with('\n') {
+        encoded.push('\n');
+    }
+    fs::write(inventory_path, encoded).map_err(|error| {
+        format!(
+            "Failed to write node inventory {}: {error}",
+            inventory_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn apply_topology_to_installer_node_env(path: &Path, vpn_ip: &str) -> Result<(), String> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("Failed to read installer env {}: {error}", path.display()))?;
+    let mut lines = content.lines().map(|line| line.to_string()).collect::<Vec<_>>();
+
+    let mut rpc_port: Option<String> = None;
+    for line in &lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("RPC_PORT=") {
+            rpc_port = trimmed.split_once('=').map(|(_, value)| value.trim().to_string());
+        }
+    }
+    let rpc_bind = format!(
+        "{vpn_ip}:{}",
+        rpc_port.clone().unwrap_or_else(|| "48638".to_string())
+    );
+
+    upsert_key_value_line(&mut lines, "HOST", vpn_ip);
+    upsert_key_value_line(&mut lines, "MONITOR_HOST", vpn_ip);
+    upsert_key_value_line(&mut lines, "VPN_IP", vpn_ip);
+    upsert_key_value_line(&mut lines, "RPC_BIND_ADDRESS", &rpc_bind);
+    upsert_key_value_line(&mut lines, "SYNERGY_RPC_BIND_ADDRESS", &rpc_bind);
+
+    let mut encoded = lines.join("\n");
+    if !encoded.ends_with('\n') {
+        encoded.push('\n');
+    }
+    fs::write(path, encoded)
+        .map_err(|error| format!("Failed to write installer env {}: {error}", path.display()))?;
+    Ok(())
+}
+
+fn apply_topology_to_installer_node_toml(path: &Path, vpn_ip: &str) -> Result<(), String> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("Failed to read installer config {}: {error}", path.display()))?;
+    let mut lines = content.lines().map(|line| line.to_string()).collect::<Vec<_>>();
+
+    let mut rpc_port = "48638".to_string();
+    let mut p2p_port = "38638".to_string();
+    for line in &lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("rpc_port =") {
+            if let Some((_, value)) = trimmed.split_once('=') {
+                rpc_port = value.trim().trim_matches('"').to_string();
+            }
+        }
+        if trimmed.starts_with("p2p_port =") {
+            if let Some((_, value)) = trimmed.split_once('=') {
+                p2p_port = value.trim().trim_matches('"').to_string();
+            }
+        }
+    }
+
+    replace_or_append_line(
+        &mut lines,
+        "bind_address =",
+        format!("bind_address = \"{vpn_ip}:{rpc_port}\""),
+    );
+    replace_or_append_line(
+        &mut lines,
+        "listen_address =",
+        format!("listen_address = \"{vpn_ip}:{p2p_port}\""),
+    );
+    replace_or_append_line(
+        &mut lines,
+        "public_address =",
+        format!("public_address = \"{vpn_ip}:{p2p_port}\""),
+    );
+
+    let mut encoded = lines.join("\n");
+    if !encoded.ends_with('\n') {
+        encoded.push('\n');
+    }
+    fs::write(path, encoded).map_err(|error| {
+        format!(
+            "Failed to write installer config {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn upsert_key_value_line(lines: &mut Vec<String>, key: &str, value: &str) {
+    let prefix = format!("{key}=");
+    if let Some(index) = lines.iter().position(|line| line.trim_start().starts_with(&prefix)) {
+        lines[index] = format!("{key}={value}");
+    } else {
+        lines.push(format!("{key}={value}"));
+    }
+}
+
+fn replace_or_append_line(lines: &mut Vec<String>, line_prefix: &str, replacement: String) {
+    if let Some(index) = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with(line_prefix))
+    {
+        lines[index] = replacement;
+    } else {
+        lines.push(replacement);
+    }
 }
 
 fn security_config_path() -> Result<PathBuf, String> {

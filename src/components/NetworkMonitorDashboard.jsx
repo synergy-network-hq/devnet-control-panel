@@ -4,6 +4,17 @@ import { Link } from 'react-router-dom';
 
 const REFRESH_SECONDS_OPTIONS = [3, 5, 10, 15, 30];
 
+const PHYSICAL_NODE_MAP = {
+  'machine-01': ['machine-01'],
+  'machine-02': ['machine-02', 'machine-15'],
+  'machine-03': ['machine-03', 'machine-07'],
+  'machine-04': ['machine-04', 'machine-06'],
+  'machine-05': ['machine-05', 'machine-10'],
+  'machine-06': ['machine-11', 'machine-08'],
+  'machine-07': ['machine-09', 'machine-13'],
+  'machine-08': ['machine-14', 'machine-12'],
+};
+
 function formatLocalTimestamp(value) {
   if (!value) return 'N/A';
   const date = new Date(value);
@@ -25,12 +36,14 @@ function NetworkMonitorDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [viewMode, setViewMode] = useState('physical');
 
   const fetchSnapshot = async (silent = false) => {
     if (!silent) setLoading(true);
     try {
       if (!workspaceReady) {
         await invoke('monitor_initialize_workspace');
+        await invoke('monitor_apply_eight_machine_topology');
         setWorkspaceReady(true);
       }
       const [path, data] = await Promise.all([
@@ -74,6 +87,64 @@ function NetworkMonitorDashboard() {
       .join(' | ');
   }, [nodes]);
 
+  const physicalRows = useMemo(
+    () =>
+      Object.entries(PHYSICAL_NODE_MAP).map(([physicalMachineId, logicalMachineIds]) => {
+        const entries = logicalMachineIds
+          .map((logicalMachineId) => nodes.find((entry) => entry.node.machine_id === logicalMachineId))
+          .filter(Boolean);
+
+        const onlineCount = entries.filter((entry) => entry.online).length;
+        const anySyncing = entries.some((entry) => entry.syncing === true);
+        let status = 'offline';
+        if (entries.length > 0 && onlineCount === entries.length) {
+          status = anySyncing ? 'syncing' : 'online';
+        } else if (onlineCount > 0) {
+          status = 'syncing';
+        }
+
+        const highestBlock = entries
+          .map((entry) => entry.block_height)
+          .filter((value) => value !== null && value !== undefined)
+          .reduce((acc, value) => Math.max(acc, value), 0);
+
+        const peers = entries
+          .map((entry) => (entry.peer_count === null || entry.peer_count === undefined ? 0 : entry.peer_count))
+          .reduce((acc, value) => acc + value, 0);
+
+        const latencyAvg = entries.length
+          ? Math.round(entries.reduce((acc, entry) => acc + Number(entry.response_ms || 0), 0) / entries.length)
+          : 0;
+
+        const errors = entries
+          .map((entry) => entry.error)
+          .filter((value) => value)
+          .join(' | ');
+
+        const roleGroup = Array.from(new Set(entries.map((entry) => entry.node.role_group))).join(', ');
+        const role = Array.from(new Set(entries.map((entry) => entry.node.role))).join(', ');
+        const nodeType = Array.from(new Set(entries.map((entry) => entry.node.node_type))).join(', ');
+
+        return {
+          physicalMachineId,
+          logicalMachineIds,
+          status,
+          highestBlock: highestBlock || null,
+          peers,
+          latencyAvg,
+          errors,
+          roleGroup,
+          role,
+          nodeType,
+          entries,
+        };
+      }),
+    [nodes],
+  );
+
+  const topologyNote =
+    'Topology mode: 15 logical node slots are distributed across 8 physical machines (machine-01..08).';
+
   if (loading) {
     return (
       <section className="monitor-shell">
@@ -101,14 +172,15 @@ function NetworkMonitorDashboard() {
             <strong>{formatLocalTimestamp(snapshot?.captured_at_utc)}</strong>
           </p>
           <p className="monitor-path">{roleGroupSummary}</p>
+          <p className="monitor-path">{topologyNote}</p>
         </div>
         <div className="monitor-toolbar-right">
           <Link className="monitor-link-btn" to="/settings">
             Operator Configuration
           </Link>
-          <Link className="monitor-link-btn" to="/jarvis">
-            Launch Jarvis Setup
-          </Link>
+          <button className="monitor-btn" onClick={() => setViewMode((prev) => (prev === 'physical' ? 'logical' : 'physical'))}>
+            {viewMode === 'physical' ? 'Switch To Logical View' : 'Switch To Physical View'}
+          </button>
           <button className="monitor-btn monitor-btn-primary" onClick={() => fetchSnapshot()}>
             Refresh Now
           </button>
@@ -173,7 +245,7 @@ function NetworkMonitorDashboard() {
         <table className="monitor-table">
           <thead>
             <tr>
-              <th>Machine</th>
+              <th>{viewMode === 'physical' ? 'Physical Machine' : 'Machine'}</th>
               <th>Node ID</th>
               <th>Role Group</th>
               <th>Role</th>
@@ -189,38 +261,77 @@ function NetworkMonitorDashboard() {
             </tr>
           </thead>
           <tbody>
-            {nodes.map((entry) => (
-              <tr key={entry.node.machine_id}>
-                <td>{entry.node.machine_id}</td>
-                <td>{entry.node.node_id}</td>
-                <td>{entry.node.role_group}</td>
-                <td>{entry.node.role}</td>
-                <td>{entry.node.node_type}</td>
-                <td>
-                  <code>{entry.node.rpc_url}</code>
-                </td>
-                <td>
-                  <span className={`status-pill status-${entry.status}`}>{entry.status}</span>
-                </td>
-                <td>{entry.block_height ?? 'N/A'}</td>
-                <td>{entry.peer_count ?? 'N/A'}</td>
-                <td>{entry.syncing === null ? 'N/A' : String(entry.syncing)}</td>
-                <td>
-                  {entry.response_ms}
-                  {' '}
-                  ms
-                </td>
-                <td>{truncate(entry.error || '')}</td>
-                <td>
-                  <Link
-                    className="monitor-link-btn"
-                    to={`/node/${encodeURIComponent(entry.node.machine_id)}`}
-                  >
-                    Open
-                  </Link>
-                </td>
-              </tr>
-            ))}
+            {viewMode === 'physical'
+              ? physicalRows.map((row) => (
+                <tr key={row.physicalMachineId}>
+                  <td>{row.physicalMachineId}</td>
+                  <td>{row.logicalMachineIds.join(', ')}</td>
+                  <td>{row.roleGroup || 'N/A'}</td>
+                  <td>{row.role || 'N/A'}</td>
+                  <td>{row.nodeType || 'N/A'}</td>
+                  <td>
+                    {row.entries.map((entry) => (
+                      <div key={entry.node.machine_id}>
+                        <code>{entry.node.machine_id}</code>
+                        {' '}
+                        <code>{entry.node.rpc_url}</code>
+                      </div>
+                    ))}
+                  </td>
+                  <td>
+                    <span className={`status-pill status-${row.status}`}>{row.status}</span>
+                  </td>
+                  <td>{row.highestBlock ?? 'N/A'}</td>
+                  <td>{row.peers ?? 'N/A'}</td>
+                  <td>{row.entries.some((entry) => entry.syncing === true) ? 'true' : 'false'}</td>
+                  <td>{row.latencyAvg} ms</td>
+                  <td>{truncate(row.errors || '')}</td>
+                  <td>
+                    {row.entries.map((entry) => (
+                      <Link
+                        key={entry.node.machine_id}
+                        className="monitor-link-btn"
+                        to={`/node/${encodeURIComponent(entry.node.machine_id)}`}
+                        style={{ marginRight: '0.35rem' }}
+                      >
+                        {entry.node.machine_id}
+                      </Link>
+                    ))}
+                  </td>
+                </tr>
+              ))
+              : nodes.map((entry) => (
+                <tr key={entry.node.machine_id}>
+                  <td>{entry.node.machine_id}</td>
+                  <td>{entry.node.node_id}</td>
+                  <td>{entry.node.role_group}</td>
+                  <td>{entry.node.role}</td>
+                  <td>{entry.node.node_type}</td>
+                  <td>
+                    <code>{entry.node.rpc_url}</code>
+                  </td>
+                  <td>
+                    <span className={`status-pill status-${entry.status}`}>{entry.status}</span>
+                  </td>
+                  <td>{entry.block_height ?? 'N/A'}</td>
+                  <td>{entry.peer_count ?? 'N/A'}</td>
+                  <td>{entry.syncing === null ? 'N/A' : String(entry.syncing)}</td>
+                  <td>
+                    {entry.response_ms}
+                    {' '}
+                    ms
+                  </td>
+                  <td>{truncate(entry.error || '')}</td>
+                  <td>
+                    <Link
+                      className="monitor-link-btn"
+                      to={`/node/${encodeURIComponent(entry.node.machine_id)}`}
+                    >
+                      Open
+                    </Link>
+                  </td>
+                </tr>
+              ))}
           </tbody>
         </table>
       </div>
