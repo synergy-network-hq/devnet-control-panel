@@ -675,3 +675,74 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ===== INTEGRATION PENDING STATE ===== */
+.sxcp-pending-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+  flex: 1;
+}
+
+.sxcp-pending-card {
+  max-width: 560px;
+  width: 100%;
+  background: var(--snrg-bg-glass-medium);
+  border: 1px solid var(--snrg-border-neutral-medium);
+  border-radius: 12px;
+  padding: 2.5rem 2rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.sxcp-pending-icon {
+  color: var(--snrg-text-tertiary);
+  opacity: 0.5;
+}
+
+.sxcp-pending-card h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--snrg-text-primary);
+  margin: 0;
+}
+
+.sxcp-pending-card > p {
+  font-size: 0.875rem;
+  color: var(--snrg-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.sxcp-pending-note {
+  font-size: 0.78rem !important;
+  color: var(--snrg-text-tertiary) !important;
+  font-style: italic;
+}
+
+.sxcp-chain-status-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid var(--snrg-border-neutral-medium);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  background: var(--snrg-bg-glass-light);
+}
+
+.sxcp-chain-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.sxcp-chain-name {
+  font-size: 0.85rem;
+  color: var(--snrg-text-secondary);
+}

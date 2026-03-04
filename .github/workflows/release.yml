@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v2.2.2)'
+        description: 'Release tag (e.g. v2.3.1)'
         required: true
 
 env:
@@ -22,15 +22,12 @@ jobs:
           - platform: macos-latest
             target: aarch64-apple-darwin
             label: macos-arm64
-            bundles: app,dmg
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: linux-x64
-            bundles: deb,appimage
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             label: windows-x64
-            bundles: nsis
 
     runs-on: ${{ matrix.platform }}
 
@@ -46,12 +43,8 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            src-tauri -> target
+          workspaces: src-tauri -> target
           key: ${{ matrix.target }}
-          shared-key: release-${{ runner.os }}
-          cache-workspace-crates: true
-          cache-on-failure: true
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -59,110 +52,15 @@ jobs:
           node-version: 20
 
       - name: Install frontend dependencies
-        run: npm install --prefer-offline --no-audit --no-fund
+        run: npm install
 
+      # env_config.rs embeds .env at compile time via include_str! — provide a placeholder
       - name: Create .env if missing
         shell: bash
         run: |
           if [ ! -f .env ]; then
-            echo "# CI placeholder — real values are set per-machine at runtime" > .env
+            echo "# CI placeholder" > .env
           fi
-
-      - name: Resolve updater public key
-        shell: bash
-        env:
-          TAURI_SIGNING_PUBLIC_KEY_SECRET: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY || secrets.TAURI_PUBLIC_KEY }}
-        run: |
-          set -euo pipefail
-
-          resolved_pubkey="${TAURI_SIGNING_PUBLIC_KEY_SECRET:-}"
-          if [[ -z "$resolved_pubkey" ]]; then
-            resolved_pubkey="$(node - <<'NODE'
-            const fs = require('fs');
-            const confPath = 'src-tauri/tauri.conf.json';
-            const conf = JSON.parse(fs.readFileSync(confPath, 'utf8'));
-            const key = (((conf || {}).plugins || {}).updater || {}).pubkey || '';
-            process.stdout.write(String(key).trim());
-            NODE
-            )"
-            if [[ -z "$resolved_pubkey" ]]; then
-              echo "::error::Missing updater public key. Set TAURI_SIGNING_PUBLIC_KEY (or TAURI_PUBLIC_KEY) secret, or define plugins.updater.pubkey in src-tauri/tauri.conf.json."
-              exit 1
-            fi
-            echo "::warning::Using updater public key from src-tauri/tauri.conf.json because TAURI_SIGNING_PUBLIC_KEY secret is not set."
-          fi
-
-          echo "TAURI_SIGNING_PUBLIC_KEY_RESOLVED=$resolved_pubkey" >> "$GITHUB_ENV"
-
-      - name: Validate updater secrets early
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
-            echo "::error::Missing TAURI_SIGNING_PRIVATE_KEY (or TAURI_PRIVATE_KEY) secret."
-            exit 1
-          fi
-
-          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
-            echo "::error::Missing TAURI_SIGNING_PRIVATE_KEY_PASSWORD (or TAURI_KEY_PASSWORD) secret."
-            exit 1
-          fi
-
-          if [[ -z "${TAURI_SIGNING_PUBLIC_KEY_RESOLVED:-}" ]]; then
-            echo "::error::Missing updater public key after resolution."
-            exit 1
-          fi
-
-          node - <<'NODE'
-          const pub = process.env.TAURI_SIGNING_PUBLIC_KEY_RESOLVED.trim();
-          const looksBase64 = /^[A-Za-z0-9+/=]+$/.test(pub) && pub.length % 4 === 0;
-          if (!looksBase64) {
-            console.error('::error::Updater pubkey is not valid base64.');
-            process.exit(1);
-          }
-          const buf = Buffer.from(pub, 'base64');
-          const utf8Roundtrip = Buffer.from(buf.toString('utf8'), 'utf8').equals(buf);
-          if (utf8Roundtrip) {
-            const decoded = buf.toString('utf8');
-            if (!decoded.includes('untrusted comment: minisign public key')) {
-              console.warn('::warning::Updater pubkey decodes as UTF-8, but does not look like minisign public key text.');
-            }
-          } else {
-            if (buf.length < 32) {
-              console.error('::error::Updater pubkey decodes to too few bytes to be valid.');
-              process.exit(1);
-            }
-            console.warn('::warning::Updater pubkey decodes to binary bytes (non-UTF8). Continuing.');
-          }
-          NODE
-
-          probe_file="$(mktemp)"
-          printf 'signing-check\n' > "$probe_file"
-          if ! npx tauri signer sign --private-key "$TAURI_SIGNING_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$probe_file" >/dev/null 2>&1; then
-            echo "::error::Unable to unlock/sign with TAURI_SIGNING_PRIVATE_KEY and password. Check key/password pairing."
-            exit 1
-          fi
-
-      - name: Inject updater public key into tauri.conf.json
-        shell: bash
-        env:
-          TAURI_SIGNING_PUBLIC_KEY: ${{ env.TAURI_SIGNING_PUBLIC_KEY_RESOLVED }}
-        run: |
-          node - <<'NODE'
-          const fs = require('fs');
-          const confPath = 'src-tauri/tauri.conf.json';
-          const conf = JSON.parse(fs.readFileSync(confPath, 'utf8'));
-          conf.bundle = conf.bundle || {};
-          conf.bundle.createUpdaterArtifacts = true;
-          conf.plugins = conf.plugins || {};
-          conf.plugins.updater = conf.plugins.updater || {};
-          conf.plugins.updater.pubkey = process.env.TAURI_SIGNING_PUBLIC_KEY.trim();
-          fs.writeFileSync(confPath, `${JSON.stringify(conf, null, 2)}\n`);
-          NODE
 
       - name: Install Linux dependencies
         if: matrix.label == 'linux-x64'
@@ -178,48 +76,32 @@ jobs:
             libsoup-3.0-dev \
             javascriptcoregtk-4.1-dev
 
-      - name: Build Tauri app (Unix)
-        if: runner.os != 'Windows'
+      - name: Build Tauri app
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
-        run: npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        shell: bash
+        run: npx tauri build --target ${{ matrix.target }}
 
-      - name: Build Tauri app (Windows)
-        if: runner.os == 'Windows'
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_KEY_PASSWORD }}
-        run: npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      # ── Collect artifacts ────────────────────────────────────────────────────
 
       - name: Collect artifacts (macOS)
-        if: startsWith(matrix.label, 'macos')
+        if: matrix.label == 'macos-arm64'
         run: |
           mkdir -p artifacts
-          cp src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg artifacts/ 2>/dev/null || true
-          cp src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.tar.gz artifacts/ 2>/dev/null || true
-          cp src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.sig artifacts/ 2>/dev/null || true
-          cd artifacts
-          for f in *.dmg; do
-            [ -f "$f" ] && mv "$f" "${f%.dmg}_${{ matrix.label }}.dmg" 2>/dev/null || true
-          done
-          for f in *.app.tar.gz; do
-            [ -f "$f" ] && mv "$f" "${f%.app.tar.gz}_${{ matrix.label }}.app.tar.gz" 2>/dev/null || true
-          done
-          for f in *.app.tar.gz.sig; do
-            [ -f "$f" ] && mv "$f" "${f%.app.tar.gz.sig}_${{ matrix.label }}.app.tar.gz.sig" 2>/dev/null || true
-          done
-          cd ..
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg          artifacts/ 2>/dev/null || true
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz artifacts/ 2>/dev/null || true
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.sig         artifacts/ 2>/dev/null || true
           ls -la artifacts/
 
       - name: Collect artifacts (Linux)
         if: matrix.label == 'linux-x64'
         run: |
           mkdir -p artifacts
-          cp src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb artifacts/ 2>/dev/null || true
-          cp src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.sig artifacts/ 2>/dev/null || true
-          cp src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.tar.gz artifacts/ 2>/dev/null || true
-          cp src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.sig artifacts/ 2>/dev/null || true
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb                  artifacts/ 2>/dev/null || true
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage         artifacts/ 2>/dev/null || true
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.tar.gz  artifacts/ 2>/dev/null || true
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.sig              artifacts/ 2>/dev/null || true
           ls -la artifacts/
 
       - name: Collect artifacts (Windows)
@@ -227,9 +109,12 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts
-          Copy-Item "src-tauri\target\${{ matrix.target }}\release\bundle\nsis\*.exe" artifacts\ -ErrorAction SilentlyContinue
-          Copy-Item "src-tauri\target\${{ matrix.target }}\release\bundle\nsis\*.zip" artifacts\ -ErrorAction SilentlyContinue
-          Copy-Item "src-tauri\target\${{ matrix.target }}\release\bundle\nsis\*.sig" artifacts\ -ErrorAction SilentlyContinue
+          Copy-Item "src-tauri\target\${{ matrix.target }}\release\bundle\nsis\*.exe"  artifacts\ -ErrorAction SilentlyContinue
+          Copy-Item "src-tauri\target\${{ matrix.target }}\release\bundle\nsis\*.zip"  artifacts\ -ErrorAction SilentlyContinue
+          Copy-Item "src-tauri\target\${{ matrix.target }}\release\bundle\nsis\*.sig"  artifacts\ -ErrorAction SilentlyContinue
+          Copy-Item "src-tauri\target\${{ matrix.target }}\release\bundle\msi\*.msi"   artifacts\ -ErrorAction SilentlyContinue
+          Copy-Item "src-tauri\target\${{ matrix.target }}\release\bundle\msi\*.zip"   artifacts\ -ErrorAction SilentlyContinue
+          Copy-Item "src-tauri\target\${{ matrix.target }}\release\bundle\msi\*.sig"   artifacts\ -ErrorAction SilentlyContinue
           Get-ChildItem artifacts\
 
       - name: Upload artifacts
@@ -237,6 +122,8 @@ jobs:
         with:
           name: artifacts-${{ matrix.label }}
           path: artifacts/*
+
+  # ── Publish: generate latest.json and create release on public releases repo ──
 
   publish:
     needs: build
@@ -264,6 +151,7 @@ jobs:
         run: |
           mkdir -p release-assets
           find all-artifacts -type f -exec cp {} release-assets/ \;
+          echo "=== Release assets ==="
           ls -la release-assets/
 
       - name: Generate latest.json
@@ -274,73 +162,55 @@ jobs:
           BASE_URL="https://github.com/${{ env.RELEASES_REPO }}/releases/download/${VERSION}"
 
           find_file() {
-            local pattern="$1"
             local result
-            result=$(find release-assets -name "$pattern" -type f 2>/dev/null | head -1)
-            if [[ -n "$result" ]]; then
-              basename "$result"
-            fi
+            result=$(find release-assets -name "$1" -type f 2>/dev/null | head -1)
+            [[ -n "$result" ]] && basename "$result" || echo ""
           }
 
           read_sig() {
-            local pattern="$1"
-            local sig_file
-            sig_file=$(find release-assets -name "$pattern" -type f 2>/dev/null | head -1)
-            if [[ -f "$sig_file" ]]; then
-              cat "$sig_file"
-            fi
+            local f
+            f=$(find release-assets -name "$1" -type f 2>/dev/null | head -1)
+            [[ -f "$f" ]] && cat "$f" || echo ""
           }
 
-          require_non_empty() {
-            local value="$1"
-            local label="$2"
-            if [[ -z "$value" ]]; then
-              echo "::error::Missing ${label} in release-assets."
-              ls -la release-assets/
-              exit 1
-            fi
-          }
+          # macOS (ARM — the only macOS build)
+          MACOS_BUNDLE=$(find_file "*.app.tar.gz")
+          MACOS_SIG=$(read_sig "*.app.tar.gz.sig")
 
-          MACOS_BUNDLE=$(find_file "*macos-arm64.app.tar.gz")
-          MACOS_SIG=$(read_sig "*macos-arm64.app.tar.gz.sig")
-          require_non_empty "$MACOS_BUNDLE" "macOS updater bundle (*.app.tar.gz)"
-          require_non_empty "$MACOS_SIG" "macOS updater signature (*.app.tar.gz.sig)"
-
+          # Linux (AppImage preferred for updater)
           LINUX_BUNDLE=$(find_file "*.AppImage.tar.gz")
           LINUX_SIG=$(read_sig "*.AppImage.tar.gz.sig")
-          if [[ -z "$LINUX_BUNDLE" || -z "$LINUX_SIG" ]]; then
-            LINUX_BUNDLE=$(find_file "*.deb")
-            LINUX_SIG=$(read_sig "*.deb.sig")
-          fi
-          require_non_empty "$LINUX_BUNDLE" "Linux updater bundle (*.AppImage.tar.gz or *.deb)"
-          require_non_empty "$LINUX_SIG" "Linux updater signature (*.AppImage.tar.gz.sig or *.deb.sig)"
 
+          # Windows (NSIS preferred, fallback MSI)
           WIN_BUNDLE=$(find_file "*-setup.nsis.zip")
           WIN_SIG=$(read_sig "*-setup.nsis.zip.sig")
-          require_non_empty "$WIN_BUNDLE" "Windows updater bundle (*-setup.nsis.zip)"
-          require_non_empty "$WIN_SIG" "Windows updater signature (*-setup.nsis.zip.sig)"
+          if [[ -z "$WIN_BUNDLE" ]]; then
+            WIN_BUNDLE=$(find_file "*.msi.zip")
+            WIN_SIG=$(read_sig "*.msi.zip.sig")
+          fi
 
           jq -n \
-            --arg version "$VERSION_NUM" \
-            --arg notes "Synergy Devnet Control Center ${VERSION}" \
-            --arg pub_date "$RELEASE_DATE" \
-            --arg darwin_url "${BASE_URL}/${MACOS_BUNDLE}" \
-            --arg darwin_sig "${MACOS_SIG}" \
-            --arg linux_url "${BASE_URL}/${LINUX_BUNDLE}" \
-            --arg linux_sig "${LINUX_SIG}" \
-            --arg win_url "${BASE_URL}/${WIN_BUNDLE}" \
-            --arg win_sig "${WIN_SIG}" \
+            --arg version    "$VERSION_NUM" \
+            --arg notes      "Synergy Devnet Control Center ${VERSION}" \
+            --arg pub_date   "$RELEASE_DATE" \
+            --arg mac_url    "${BASE_URL}/${MACOS_BUNDLE}" \
+            --arg mac_sig    "${MACOS_SIG}" \
+            --arg linux_url  "${BASE_URL}/${LINUX_BUNDLE}" \
+            --arg linux_sig  "${LINUX_SIG}" \
+            --arg win_url    "${BASE_URL}/${WIN_BUNDLE}" \
+            --arg win_sig    "${WIN_SIG}" \
             '{
-              version: $version,
-              notes: $notes,
+              version:  $version,
+              notes:    $notes,
               pub_date: $pub_date,
               platforms: {
-                "darwin-aarch64": { url: $darwin_url, signature: $darwin_sig },
-                "linux-x86_64": { url: $linux_url, signature: $linux_sig },
-                "windows-x86_64": { url: $win_url, signature: $win_sig }
+                "darwin-aarch64": { url: $mac_url,   signature: $mac_sig   },
+                "linux-x86_64":   { url: $linux_url, signature: $linux_sig },
+                "windows-x86_64": { url: $win_url,   signature: $win_sig   }
               }
             }' > release-assets/latest.json
 
+          echo "=== latest.json ==="
           cat release-assets/latest.json
 
       - name: Create GitHub Release on releases repo
@@ -352,18 +222,19 @@ jobs:
           body: |
             ## Synergy Devnet Control Center ${{ steps.tag.outputs.version }}
 
-            ### Installers
-            | Platform | Installer |
-            |----------|-----------|
+            ### Installation
+            | Platform | Download |
+            |----------|----------|
             | macOS (Apple Silicon) | `.dmg` |
-            | Linux (x86_64) | `.deb` |
-            | Windows (x86_64) | `.exe` (NSIS) |
+            | Linux (x86_64) | `.deb` or `.AppImage` |
+            | Windows (x86_64) | `.exe` (NSIS installer) |
 
             ### Auto-Update
-            This release includes signed updater metadata (`latest.json`) and platform updater bundles.
+            Machines with the control panel already installed will be notified via
+            the **Check for Updates** button in the app.
 
             ---
-            *Built from source commit ${{ github.sha }}*
+            *Built from commit ${{ github.sha }}*
           files: release-assets/*
           token: ${{ secrets.RELEASES_REPO_TOKEN }}
           draft: false
