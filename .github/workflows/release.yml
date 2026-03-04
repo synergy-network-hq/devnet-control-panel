@@ -32,10 +32,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest     # Apple Silicon
+          - platform: macos-latest     # Apple Silicon (builds both targets)
             target: aarch64-apple-darwin
             label: macos-arm64
-          - platform: macos-13         # Intel Mac
+          - platform: macos-latest     # Intel Mac (cross-compile on ARM runner)
             target: x86_64-apple-darwin
             label: macos-x64
           - platform: ubuntu-22.04
@@ -65,10 +65,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm install
 
       # Linux-specific: install system libraries Tauri needs
       - name: Install Linux dependencies
