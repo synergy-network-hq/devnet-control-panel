@@ -30,23 +30,34 @@ Private source repo                     Public releases repo
 ### 1. Add secrets to the PRIVATE source repo
 
 Go to **https://github.com/synergy-network-hq/devnet-control-panel/settings/secrets/actions**
-and add these two repository secrets:
+and add these repository secrets:
 
 #### `TAURI_SIGNING_PRIVATE_KEY`
 
 This is the signing key that signs update bundles so the app trusts them.
 
-Recommended: store the **full minisign secret key text** (comment line + payload line),
-or store the **base64 of that full text**.
-The release workflow normalizes both formats before calling Tauri.
+Set this to the **exact content** of the generated private key file
+(for example, `updater.key` from `tauri signer generate`).
 
 ```text
-untrusted comment: minisign encrypted secret key
-RWQAAE...<base64 minisign secret key payload>...==
+dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5...
 ```
 
 > **IMPORTANT:** Keep this key secret. Anyone with this key can sign fake
 > updates that your app will trust.
+
+#### `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+
+Set this to the passphrase used when generating the private key.
+
+#### `TAURI_SIGNING_PUBLIC_KEY`
+
+Set this to the **exact content** of the generated public key file
+(`updater.key.pub`), which is also a base64 string.
+
+```text
+dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6...
+```
 
 #### `RELEASES_REPO_TOKEN`
 
@@ -148,11 +159,11 @@ This URL always resolves to the `latest.json` from the most recent release.
 | Key | Value |
 |-----|-------|
 | Algorithm | Ed25519 (minisign format) |
-| Public key | `RWQxnDMVv5SoUaCTmMNFSYlJEbV/1QANtbT06D5QPSWg0sBPNYTDP6U6` |
-| Public key location | `src-tauri/tauri.conf.json` → `plugins.updater.pubkey` |
-| Private key location | GitHub secret `TAURI_SIGNING_PRIVATE_KEY` |
+| Public key source | GitHub secret `TAURI_SIGNING_PUBLIC_KEY` |
+| Public key usage | Injected into `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) during CI |
+| Private key source | GitHub secret `TAURI_SIGNING_PRIVATE_KEY` |
+| Private key password | GitHub secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
 If the private key is ever compromised, generate a new keypair, update
-the pubkey in `tauri.conf.json`, update the GitHub secret, and release
-a new version. All machines will need to manually update one last time
-(since the old key signed that build).
+all three updater secrets, and release a new version. All machines will
+need to manually update one last time (since the old key signed that build).

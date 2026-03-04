@@ -124,6 +124,11 @@ function SXCPDashboard() {
     { machine: 'machine-09', role: 'Witness/Backup Signer', description: 'Witness attestation & backup signing' },
   ];
 
+  const externalChainDeployments = [
+    { name: 'Sepolia (Ethereum Testnet)' },
+    { name: 'Amoy (Polygon Testnet)' },
+  ];
+
   if (loading) {
     return (
       <section className="sxcp-shell">
@@ -188,7 +193,7 @@ function SXCPDashboard() {
                 <span className="sxcp-card-label">PQC Algorithm</span>
               </div>
               <div className="sxcp-card-value">
-                {sxcpStatus.pqc_algorithm || 'ML-DSA-65'}
+                {sxcpStatus.pqc_algorithm || 'N/A'}
               </div>
             </div>
 
@@ -281,7 +286,7 @@ function SXCPDashboard() {
                   return (
                     <tr key={relayer.address}>
                       <td className="sxcp-addr-cell">{formatAddress(relayer.address)}</td>
-                      <td>{getStatusBadge(relayer.status || 'active')}</td>
+                      <td>{getStatusBadge(relayer.status || 'offline')}</td>
                       <td className="sxcp-metric-cell">
                         <span className="sxcp-score">{health.reputation_score || '0'}</span>
                       </td>
@@ -292,7 +297,7 @@ function SXCPDashboard() {
                         {health.attestation_count || 0}
                       </td>
                       <td className="sxcp-metric-cell">
-                        <code>{health.pqc_algorithm || 'ML-DSA-65'}</code>
+                        <code>{health.pqc_algorithm || 'N/A'}</code>
                       </td>
                       <td className="sxcp-metric-cell">
                         <span className={`sxcp-reg-badge ${health.registered ? 'registered' : 'pending'}`}>
@@ -312,45 +317,27 @@ function SXCPDashboard() {
       <section className="sxcp-section">
         <h3 className="sxcp-section-title">External Chain Deployments</h3>
         <div className="sxcp-chains-grid">
-          <div className="sxcp-chain-card">
-            <div className="sxcp-chain-header sxcp-chain-sepolia">
-              <h4>Sepolia (Ethereum Testnet)</h4>
-            </div>
-            <div className="sxcp-chain-content">
-              <div className="sxcp-chain-detail">
-                <span className="sxcp-detail-label">Gateway Contract:</span>
-                <code className="sxcp-detail-value">0x{Math.random().toString(16).slice(2, 10).toUpperCase()}</code>
+          {externalChainDeployments.map((chain) => (
+            <div className="sxcp-chain-card" key={chain.name}>
+              <div className="sxcp-chain-header">
+                <h4>{chain.name}</h4>
               </div>
-              <div className="sxcp-chain-detail">
-                <span className="sxcp-detail-label">Attestation Store:</span>
-                <code className="sxcp-detail-value">0x{Math.random().toString(16).slice(2, 10).toUpperCase()}</code>
-              </div>
-              <div className="sxcp-chain-detail">
-                <span className="sxcp-detail-label">Chain Status:</span>
-                <span className="sxcp-status-badge sxcp-status-active">Connected</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="sxcp-chain-card">
-            <div className="sxcp-chain-header sxcp-chain-amoy">
-              <h4>Amoy (Polygon Testnet)</h4>
-            </div>
-            <div className="sxcp-chain-content">
-              <div className="sxcp-chain-detail">
-                <span className="sxcp-detail-label">Gateway Contract:</span>
-                <code className="sxcp-detail-value">0x{Math.random().toString(16).slice(2, 10).toUpperCase()}</code>
-              </div>
-              <div className="sxcp-chain-detail">
-                <span className="sxcp-detail-label">Attestation Store:</span>
-                <code className="sxcp-detail-value">0x{Math.random().toString(16).slice(2, 10).toUpperCase()}</code>
-              </div>
-              <div className="sxcp-chain-detail">
-                <span className="sxcp-detail-label">Chain Status:</span>
-                <span className="sxcp-status-badge sxcp-status-active">Connected</span>
+              <div className="sxcp-chain-content">
+                <div className="sxcp-chain-detail">
+                  <span className="sxcp-detail-label">Gateway Contract:</span>
+                  <code className="sxcp-detail-value">Pending integration</code>
+                </div>
+                <div className="sxcp-chain-detail">
+                  <span className="sxcp-detail-label">Attestation Store:</span>
+                  <code className="sxcp-detail-value">Pending integration</code>
+                </div>
+                <div className="sxcp-chain-detail">
+                  <span className="sxcp-detail-label">Chain Status:</span>
+                  <span className="sxcp-status-badge sxcp-status-pending">Not Connected</span>
+                </div>
               </div>
             </div>
-          </div>
+          ))}
 
           <div className="sxcp-chain-card sxcp-wiring-card">
             <div className="sxcp-chain-header">
@@ -364,11 +351,11 @@ function SXCPDashboard() {
               </div>
               <div className="sxcp-chain-detail">
                 <span className="sxcp-detail-label">Status:</span>
-                <span className="sxcp-status-badge sxcp-status-active">Bidirectional</span>
+                <span className="sxcp-status-badge sxcp-status-pending">Pending External Testnet Setup</span>
               </div>
               <div className="sxcp-chain-detail">
                 <span className="sxcp-detail-label">Last Sync:</span>
-                <span className="sxcp-detail-value">2 seconds ago</span>
+                <span className="sxcp-detail-value">Not available</span>
               </div>
             </div>
           </div>
@@ -436,8 +423,8 @@ function SXCPDashboard() {
               </div>
               <p className="sxcp-node-description">{node.description}</p>
               <div className="sxcp-node-status">
-                <span className="sxcp-status-badge sxcp-status-active">Online</span>
-                <span className="sxcp-node-queue">Queue: 0</span>
+                <span className="sxcp-status-badge sxcp-status-pending">Pending Integration</span>
+                <span className="sxcp-node-queue">Queue: N/A</span>
               </div>
             </div>
           ))}
