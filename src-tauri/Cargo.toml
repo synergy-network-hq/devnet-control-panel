@@ -1,6 +1,6 @@
 [package]
 name = "synergy-node-monitor-panel"
-version = "2.0.7"
+version = "2.1.1"
 description = "Synergy Network Devnet Node Monitoring Panel"
 authors = ["Synergy Network"]
 edition = "2021"
