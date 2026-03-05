@@ -224,8 +224,20 @@ if [[ -z "$BOOTNODE2_HOST" || -z "$BOOTNODE2_PORT" ]]; then
   exit 1
 fi
 
-BOOTNODE1="snr://bootstrap@${BOOTNODE1_HOST}:${BOOTNODE1_PORT}"
-BOOTNODE2="snr://bootstrap@${BOOTNODE2_HOST}:${BOOTNODE2_PORT}"
+BOOTNODE1_PEER_ID="$(lookup_node_address "machine-01")"
+BOOTNODE2_PEER_ID="$(lookup_node_address "machine-02")"
+
+if [[ -z "$BOOTNODE1_PEER_ID" ]]; then
+  echo "Could not resolve peer ID for machine-01 from node-addresses.csv." >&2
+  exit 1
+fi
+if [[ -z "$BOOTNODE2_PEER_ID" ]]; then
+  echo "Could not resolve peer ID for machine-02 from node-addresses.csv." >&2
+  exit 1
+fi
+
+BOOTNODE1="snr://${BOOTNODE1_PEER_ID}@${BOOTNODE1_HOST}:${BOOTNODE1_PORT}"
+BOOTNODE2="snr://${BOOTNODE2_PEER_ID}@${BOOTNODE2_HOST}:${BOOTNODE2_PORT}"
 ALLOWED_VALIDATOR_ADDRESSES="$(collect_allowed_validator_addresses)"
 
 generated_count=0
