@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { openHelpWindow } from '../lib/helpWindow';
 
-const APP_VERSION = '2.4.1';
+const APP_VERSION = '2.4.2';
 
 function Layout({ children }) {
   const location = useLocation();
