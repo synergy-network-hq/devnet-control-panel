@@ -133,7 +133,7 @@ b = base64.b64decode('$CONF_PUBKEY')
 print(binascii.hexlify(b[2:10]).decode().upper())
 " 2>/dev/null) || fail "Could not decode pubkey from tauri.conf.json"
 
-if [[ "${KEY_ID_FROM_HEADER,,}" == "${KEY_ID_FROM_PUBKEY,,}" ]]; then
+if [[ "$(echo "$KEY_ID_FROM_HEADER" | tr '[:upper:]' '[:lower:]')" == "$(echo "$KEY_ID_FROM_PUBKEY" | tr '[:upper:]' '[:lower:]')" ]]; then
   pass "Key IDs match: $KEY_ID_FROM_HEADER"
 else
   fail "KEY ID MISMATCH!
