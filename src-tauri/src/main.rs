@@ -46,7 +46,8 @@ use crate::agent::{
     ensure_local_devnet_agent,
 };
 use crate::monitor::{
-    get_monitor_inventory_path, get_monitor_node_details, get_monitor_security_state,
+    get_monitor_agent_snapshot, get_monitor_inventory_path, get_monitor_node_details,
+    get_monitor_security_state,
     get_monitor_snapshot, get_monitor_user_manual_markdown, get_monitor_workspace_path,
     monitor_apply_devnet_topology, monitor_assign_ssh_binding,
     monitor_bulk_node_control, monitor_delete_operator, monitor_delete_ssh_profile,
@@ -229,6 +230,7 @@ async fn main() {
             monitor_apply_devnet_topology,
             get_monitor_snapshot,
             get_monitor_node_details,
+            get_monitor_agent_snapshot,
             monitor_node_control,
             monitor_bulk_node_control,
             monitor_export_node_data,
