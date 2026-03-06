@@ -394,14 +394,41 @@ fn strip_env_quotes(value: &str) -> String {
 }
 
 fn sync_workspace_installer(workspace_root: &Path, install: &NodeInstall) -> Result<(), String> {
-    let source = workspace_root
+    // Canonicalize the workspace root to establish a trusted base directory.
+    let canonical_root = workspace_root.canonicalize().map_err(|error| {
+        format!(
+            "Failed to canonicalize workspace root {}: {error}",
+            workspace_root.display()
+        )
+    })?;
+
+    // Build the expected installer source directory under the workspace root.
+    let source = canonical_root
         .join("devnet/lean15/installers")
         .join(&install.node_slot_id);
-    if !source.is_dir() || source == install.install_dir {
+
+    // Canonicalize the source path and ensure it stays within the canonical workspace root
+    // to prevent directory traversal via a tainted workspace_root.
+    let canonical_source = source.canonicalize().map_err(|error| {
+        format!(
+            "Failed to canonicalize installer source directory {}: {error}",
+            source.display()
+        )
+    })?;
+
+    if !canonical_source.starts_with(&canonical_root) {
+        return Err(format!(
+            "Installer source directory {} is outside of workspace root {}",
+            canonical_source.display(),
+            canonical_root.display()
+        ));
+    }
+
+    if !canonical_source.is_dir() || canonical_source == install.install_dir {
         return Ok(());
     }
 
-    copy_directory_force(&source, &install.install_dir)
+    copy_directory_force(&canonical_source, &install.install_dir)
 }
 
 fn reset_chain(workspace_root: &Path, install: &NodeInstall) -> Result<CommandOutcome, String> {
