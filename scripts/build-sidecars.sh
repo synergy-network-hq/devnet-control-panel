@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CARGO_MANIFEST="$ROOT_DIR/src-tauri/Cargo.toml"
-SIDECAR_TARGET_DIR="$ROOT_DIR/src-tauri/target-sidecars"
+CARGO_MANIFEST="$ROOT_DIR/src-tauri/devnet-agent/Cargo.toml"
+SIDECAR_TARGET_DIR="$ROOT_DIR/src-tauri/devnet-agent/target"
 TARGET_TRIPLE="${TAURI_ENV_TARGET_TRIPLE:-${CARGO_BUILD_TARGET:-$(rustc -vV | awk '/^host: / { print $2 }')}}"
 
 if [[ -z "${TARGET_TRIPLE:-}" ]]; then
@@ -52,8 +52,6 @@ esac
 echo "Building Synergy Devnet Agent sidecar for $TARGET_TRIPLE..."
 cargo build \
   --manifest-path "$CARGO_MANIFEST" \
-  --bin synergy-devnet-agent \
-  --features devnet-agent-bin \
   --release \
   --target-dir "$SIDECAR_TARGET_DIR" \
   "${target_arg[@]}"
