@@ -43,6 +43,12 @@ function dedupeByKey(actions = []) {
   return Array.from(map.values());
 }
 
+function titleizeKey(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
 function NetworkMonitorNodePage() {
   const { nodeSlotId } = useParams();
   const [nodeDetails, setNodeDetails] = useState(null);
@@ -213,6 +219,37 @@ function NetworkMonitorNodePage() {
   const customActions = dedupeByKey(control?.custom_actions || []);
   const resetChainAction = customActions.find((action) => action?.key === 'reset_chain');
   const customActionsVisible = customActions.filter((action) => action?.key !== 'reset_chain');
+  const node = nodeDetails?.status?.node;
+  const quickFacts = [
+    { label: 'Node Slot', value: node?.machine_id || nodeSlotId },
+    { label: 'Physical Machine', value: node?.physical_machine || 'N/A' },
+    { label: 'Node Alias', value: node?.node_id || 'N/A' },
+    { label: 'Role Group', value: node?.role_group || 'N/A' },
+    { label: 'Node Type', value: node?.node_type || 'N/A' },
+    { label: 'Address', value: node?.node_address || 'N/A', code: true },
+  ];
+  const runtimeFacts = [
+    { label: 'RPC Endpoint', value: node?.rpc_url || 'N/A', code: true },
+    { label: 'Status', value: nodeDetails?.status?.status || 'unknown' },
+    { label: 'Syncing', value: scalar(nodeDetails?.status?.syncing) },
+    { label: 'Checked', value: formatLocalTimestamp(nodeDetails?.status?.last_checked_utc) },
+    { label: 'Captured', value: formatLocalTimestamp(nodeDetails?.captured_at_utc) },
+    { label: 'Role Summary', value: roleExecution?.summary || 'No execution assessment available.' },
+  ];
+  const healthStats = [
+    { label: 'Network Head', value: scalar(networkMaxHeight) },
+    { label: 'Local Height', value: scalar(localHeight) },
+    { label: 'Block Lag', value: scalar(blockLag), tone: blockLag > 25 ? 'critical' : blockLag > 0 ? 'degraded' : 'healthy' },
+    { label: 'Peers', value: scalar(nodeDetails?.status?.peer_count), tone: Number(nodeDetails?.status?.peer_count || 0) > 0 ? 'healthy' : 'critical' },
+    { label: 'Latency', value: `${scalar(nodeDetails?.status?.response_ms)} ms`, tone: Number(nodeDetails?.status?.response_ms || 0) > 1000 ? 'degraded' : 'healthy' },
+  ];
+  const sectionLinks = [
+    ['overview', 'Overview'],
+    ['execution', 'Execution'],
+    ['control', 'Control'],
+    ['atlas', 'Atlas'],
+    ['rpc', 'RPC'],
+  ];
 
   return (
     <section className="monitor-shell monitor-shell-node">
@@ -220,11 +257,11 @@ function NetworkMonitorNodePage() {
         <div className="monitor-hero-copy">
           <p className="monitor-hero-eyebrow">Node Slot Diagnostics</p>
           <h2 className="monitor-hero-title">
-            {nodeDetails?.status?.node?.machine_id || nodeSlotId}
+            {node?.machine_id || nodeSlotId}
             {' '}
             /
             {' '}
-            {nodeDetails?.status?.node?.role || 'unknown-role'}
+            {node?.role || 'unknown-role'}
           </h2>
           <p className="monitor-hero-summary">
             {statusSummary}
@@ -240,12 +277,12 @@ function NetworkMonitorNodePage() {
             <span className="monitor-inline-pill">
               Physical
               {' '}
-              {nodeDetails?.status?.node?.physical_machine || 'N/A'}
+              {node?.physical_machine || 'N/A'}
             </span>
             <span className="monitor-inline-pill">
               Node ID
               {' '}
-              {nodeDetails?.status?.node?.node_id || 'N/A'}
+              {node?.node_id || 'N/A'}
             </span>
             <span className="monitor-inline-pill">
               Captured
@@ -307,27 +344,21 @@ function NetworkMonitorNodePage() {
       </div>
 
       <div className="monitor-stat-grid">
-        <article className="monitor-stat-card">
-          <span className="monitor-stat-label">Network Head</span>
-          <strong className="monitor-stat-value">{scalar(networkMaxHeight)}</strong>
-        </article>
-        <article className="monitor-stat-card">
-          <span className="monitor-stat-label">Local Height</span>
-          <strong className="monitor-stat-value">{scalar(localHeight)}</strong>
-        </article>
-        <article className="monitor-stat-card">
-          <span className="monitor-stat-label">Block Lag</span>
-          <strong className="monitor-stat-value">{scalar(blockLag)}</strong>
-        </article>
-        <article className="monitor-stat-card">
-          <span className="monitor-stat-label">Peers</span>
-          <strong className="monitor-stat-value">{scalar(nodeDetails?.status?.peer_count)}</strong>
-        </article>
-        <article className="monitor-stat-card">
-          <span className="monitor-stat-label">Latency</span>
-          <strong className="monitor-stat-value">{scalar(nodeDetails?.status?.response_ms)} ms</strong>
-        </article>
+        {healthStats.map((stat) => (
+          <article key={stat.label} className={`monitor-stat-card ${stat.tone ? `monitor-stat-card-${stat.tone}` : ''}`}>
+            <span className="monitor-stat-label">{stat.label}</span>
+            <strong className="monitor-stat-value">{stat.value}</strong>
+          </article>
+        ))}
       </div>
+
+      <nav className="monitor-section-nav">
+        {sectionLinks.map(([id, label]) => (
+          <a key={id} className="monitor-section-nav-chip" href={`#${id}`}>
+            {label}
+          </a>
+        ))}
+      </nav>
 
       {detailsError && (
         <div className="monitor-error-box">
@@ -336,345 +367,451 @@ function NetworkMonitorNodePage() {
       )}
 
       {!detailsError && nodeDetails && (
-        <>
-          <div className="monitor-detail-grid">
-            <article className="monitor-detail-card">
-              <h4>Identity</h4>
-              <p><strong>Node Slot:</strong> {nodeDetails.status.node.machine_id}</p>
-              <p><strong>Physical Machine:</strong> {nodeDetails.status.node.physical_machine}</p>
-              <p><strong>Node ID:</strong> {nodeDetails.status.node.node_id}</p>
-              <p><strong>Address:</strong> {nodeDetails.status.node.node_address || 'N/A'}</p>
-              <p><strong>Type:</strong> {nodeDetails.status.node.node_type}</p>
-              <p><strong>Role:</strong> {nodeDetails.status.node.role}</p>
-              <p><strong>Status:</strong> {nodeDetails.status.status}</p>
-            </article>
-
-            <article className="monitor-detail-card">
-              <h4>Runtime</h4>
-              <p><strong>RPC:</strong> <code>{nodeDetails.status.node.rpc_url}</code></p>
-              <p><strong>Block Height:</strong> {scalar(nodeDetails.status.block_height)}</p>
-              <p><strong>Peers:</strong> {scalar(nodeDetails.status.peer_count)}</p>
-              <p><strong>Syncing:</strong> {scalar(nodeDetails.status.syncing)}</p>
-              <p><strong>Latency:</strong> {scalar(nodeDetails.status.response_ms)} ms</p>
-              <p><strong>Checked:</strong> {formatLocalTimestamp(nodeDetails.status.last_checked_utc)}</p>
-            </article>
-
-            <article className="monitor-detail-card">
-              <h4>Role-Specific Diagnostics</h4>
-              {roleDiagnosticsEntries.length === 0 && <p>No role diagnostics available.</p>}
-              {roleDiagnosticsEntries.map(([key, value]) => (
-                <p key={key}>
-                  <strong>{key}:</strong> <span className="monitor-detail-value">{scalar(value)}</span>
-                </p>
-              ))}
-            </article>
-          </div>
-
-          <div className="monitor-execution-shell">
-            <div className="monitor-execution-header">
-              <h4>Role Execution Status</h4>
-              <span className={`monitor-execution-pill monitor-execution-${roleExecution?.overall_status || 'unknown'}`}>
-                {roleExecution?.overall_status || 'unknown'}
-              </span>
-            </div>
-            <p className="monitor-control-hint">{roleExecution?.summary || 'No execution assessment available.'}</p>
-            <div className="monitor-execution-metrics">
-              <span>Pass: <strong>{countByStatus(roleExecution?.checks, 'pass')}</strong></span>
-              <span>Warn: <strong>{countByStatus(roleExecution?.checks, 'warn')}</strong></span>
-              <span>Fail: <strong>{countByStatus(roleExecution?.checks, 'fail')}</strong></span>
-            </div>
-            <div className="monitor-execution-table-wrap">
-              <table className="monitor-execution-table">
-                <thead>
-                  <tr>
-                    <th>Check</th>
-                    <th>Status</th>
-                    <th>Details</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(roleExecution?.checks || []).map((check) => (
-                    <tr key={check.key}>
-                      <td>{check.label}</td>
-                      <td>
-                        <span className={`monitor-check-pill monitor-check-${check.status}`}>
-                          {check.status}
-                        </span>
-                      </td>
-                      <td>{check.detail}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="monitor-role-notes">
-            <h4>Operational Notes</h4>
-            {(nodeDetails.role_notes || []).map((note, idx) => (
-              <p key={`${nodeDetails.status.node.machine_id}-note-${idx}`}>{note}</p>
-            ))}
-          </div>
-
-          <div className="monitor-control-shell">
-            <h4>Node Control Plane</h4>
-            <p className="monitor-control-hint">{control?.configuration_hint || 'No control configuration found.'}</p>
-
-            <div className="monitor-control-buttons">
-              <button
-                className="monitor-btn"
-                disabled={!control?.start_configured || !!controlBusyAction}
-                onClick={() => handleControlAction('start')}
-              >
-                {controlBusyAction === 'start' ? 'Starting...' : 'Start'}
-              </button>
-              <button
-                className="monitor-btn"
-                disabled={!control?.stop_configured || !!controlBusyAction}
-                onClick={() => handleControlAction('stop')}
-              >
-                {controlBusyAction === 'stop' ? 'Stopping...' : 'Stop'}
-              </button>
-              <button
-                className="monitor-btn"
-                disabled={!control?.restart_configured || !!controlBusyAction}
-                onClick={() => handleControlAction('restart')}
-              >
-                {controlBusyAction === 'restart' ? 'Restarting...' : 'Restart'}
-              </button>
-              <button
-                className="monitor-btn"
-                disabled={!control?.status_configured || !!controlBusyAction}
-                onClick={() => handleControlAction('status')}
-              >
-                {controlBusyAction === 'status' ? 'Querying...' : 'Status'}
-              </button>
-              <button
-                className="monitor-btn"
-                disabled={!control?.setup_configured || !!controlBusyAction}
-                onClick={() => handleControlAction('setup')}
-              >
-                {controlBusyAction === 'setup' ? 'Setting Up...' : 'Setup'}
-              </button>
-              <button
-                className="monitor-btn"
-                disabled={!control?.export_logs_configured || !!controlBusyAction}
-                onClick={() => handleControlAction('export_logs')}
-              >
-                {controlBusyAction === 'export_logs' ? 'Exporting Logs...' : 'Export Logs'}
-              </button>
-              <button
-                className="monitor-btn"
-                disabled={!control?.view_chain_data_configured || !!controlBusyAction}
-                onClick={() => handleControlAction('view_chain_data')}
-              >
-                {controlBusyAction === 'view_chain_data' ? 'Loading Chain Data...' : 'View Chain Data'}
-              </button>
-              <button
-                className="monitor-btn"
-                disabled={!control?.export_chain_data_configured || !!controlBusyAction}
-                onClick={() => handleControlAction('export_chain_data')}
-              >
-                {controlBusyAction === 'export_chain_data' ? 'Exporting Chain Data...' : 'Export Chain Data'}
-              </button>
-              <button
-                className="monitor-btn monitor-btn-primary"
-                disabled={exportBusy || !!controlBusyAction}
-                onClick={handleExportNodeData}
-              >
-                {exportBusy ? 'Exporting Node Snapshot...' : 'Export Node Snapshot'}
-              </button>
-              <button
-                className="monitor-btn monitor-btn-danger"
-                disabled={!resetChainAction?.configured || !!controlBusyAction}
-                onClick={() => {
-                  const approved = window.confirm(
-                    'Reset chain to genesis for this node? This stops the node, deletes local chain state, and restarts it.',
-                  );
-                  if (approved) {
-                    handleControlAction('reset_chain');
-                  }
-                }}
-                title="Stop node, delete chain data, and restart from genesis."
-              >
-                {controlBusyAction === 'reset_chain' ? 'Resetting Chain...' : 'Reset Chain (Genesis)'}
-              </button>
-            </div>
-
-            {customActionsVisible.length > 0 && (
-              <div className="monitor-action-group">
-                <h5>Custom Machine Operations</h5>
-                <div className="monitor-control-buttons">
-                  {customActionsVisible.map((action) => (
-                    <button
-                      key={action.key}
-                      className="monitor-btn"
-                      disabled={!action.configured || !!controlBusyAction}
-                      onClick={() => handleControlAction(action.key)}
-                      title={action.description}
-                    >
-                      {controlBusyAction === action.key ? 'Running...' : action.label}
-                    </button>
-                  ))}
+        <div className="monitor-node-layout">
+          <div className="monitor-node-main">
+            <section id="overview" className="monitor-detail-grid monitor-detail-grid-overview">
+              <article className="monitor-detail-card monitor-detail-card-identity">
+                <div className="monitor-card-heading">
+                  <div>
+                    <p className="monitor-card-kicker">Identity</p>
+                    <h4>Slot and Host Mapping</h4>
+                  </div>
+                  <span className={`monitor-execution-pill monitor-execution-${heroTone}`}>
+                    {nodeStatus}
+                  </span>
                 </div>
-              </div>
-            )}
-
-            {roleOperations.length > 0 && (
-              <div className="monitor-action-group">
-                <h5>Role-Specific Operations</h5>
-                <div className="monitor-control-buttons">
-                  {roleOperations.map((action) => (
-                    <button
-                      key={action.key}
-                      className="monitor-btn"
-                      disabled={!action.configured || !!controlBusyAction}
-                      onClick={() => handleControlAction(action.key)}
-                      title={action.description}
-                    >
-                      {controlBusyAction === action.key ? 'Running...' : action.label}
-                    </button>
+                <dl className="monitor-data-list">
+                  {quickFacts.map((fact) => (
+                    <div key={fact.label} className="monitor-data-row">
+                      <dt>{fact.label}</dt>
+                      <dd>{fact.code ? <code>{fact.value}</code> : fact.value}</dd>
+                    </div>
                   ))}
+                </dl>
+              </article>
+
+              <article className="monitor-detail-card monitor-detail-card-runtime">
+                <div className="monitor-card-heading">
+                  <div>
+                    <p className="monitor-card-kicker">Runtime</p>
+                    <h4>Node Process Snapshot</h4>
+                  </div>
                 </div>
-              </div>
-            )}
+                <dl className="monitor-data-list">
+                  {runtimeFacts.map((fact) => (
+                    <div key={fact.label} className="monitor-data-row">
+                      <dt>{fact.label}</dt>
+                      <dd>{fact.code ? <code>{fact.value}</code> : fact.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </article>
 
-            {controlResult && (
-              <div className={`monitor-control-result ${controlResult.success ? 'monitor-control-ok' : 'monitor-control-fail'}`}>
-                <p>
-                  <strong>Action:</strong> {controlResult.action} | <strong>Success:</strong>{' '}
-                  {String(controlResult.success)} | <strong>Exit:</strong> {controlResult.exit_code}
-                </p>
-                <p><strong>Command:</strong> <code>{controlResult.command}</code></p>
-                {controlResult.stdout && (
-                  <details>
-                    <summary>stdout</summary>
-                    <pre>{controlResult.stdout}</pre>
-                  </details>
-                )}
-                {controlResult.stderr && (
-                  <details>
-                    <summary>stderr</summary>
-                    <pre>{controlResult.stderr}</pre>
-                  </details>
-                )}
-              </div>
-            )}
-
-            {exportResult && (
-              <div className={`monitor-control-result ${exportResult.ok ? 'monitor-control-ok' : 'monitor-control-fail'}`}>
-                <p>
-                  <strong>Export Success:</strong> {String(exportResult.ok)} | <strong>When:</strong>{' '}
-                  {formatLocalTimestamp(exportResult.exported_at_utc)}
-                </p>
-                {exportResult.ok ? (
-                  <>
-                    <p><strong>File:</strong> <code>{exportResult.file_path}</code></p>
-                    <p><strong>Bytes:</strong> {exportResult.bytes}</p>
-                  </>
+              <article className="monitor-detail-card monitor-detail-card-diagnostics">
+                <div className="monitor-card-heading">
+                  <div>
+                    <p className="monitor-card-kicker">Diagnostics</p>
+                    <h4>Role-Specific Readout</h4>
+                  </div>
+                </div>
+                {roleDiagnosticsEntries.length === 0 ? (
+                  <p className="monitor-empty-state">No role diagnostics available.</p>
                 ) : (
-                  <p><strong>Error:</strong> {exportResult.error}</p>
+                  <dl className="monitor-data-list">
+                    {roleDiagnosticsEntries.map(([key, value]) => (
+                      <div key={key} className="monitor-data-row">
+                        <dt>{titleizeKey(key)}</dt>
+                        <dd className="monitor-detail-value">{scalar(value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
                 )}
+              </article>
+            </section>
+
+            <section id="execution" className="monitor-execution-shell">
+              <div className="monitor-execution-header">
+                <div>
+                  <p className="monitor-card-kicker">Execution</p>
+                  <h4>Role Execution Status</h4>
+                </div>
+                <span className={`monitor-execution-pill monitor-execution-${roleExecution?.overall_status || 'unknown'}`}>
+                  {roleExecution?.overall_status || 'unknown'}
+                </span>
               </div>
-            )}
-          </div>
-
-          <div className="monitor-atlas-shell">
-            <div className="monitor-execution-header">
-              <h4>Atlas Explorer Bridge</h4>
-              <span className={`monitor-execution-pill monitor-execution-${atlas?.enabled ? 'healthy' : 'unknown'}`}>
-                {atlas?.enabled ? 'connected' : 'not-configured'}
-              </span>
-            </div>
-            {!atlas?.enabled ? (
-              <p className="monitor-control-hint">
-                Atlas link integration is not configured. Set <code>ATLAS_BASE_URL</code> or
-                <code> EXPLORER_URL</code> in <code>devnet/lean15/hosts.env</code>.
-              </p>
-            ) : (
-              <div className="monitor-atlas-links">
-                {atlas.home_url && (
-                  <a href={atlas.home_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
-                    Atlas Home
-                  </a>
-                )}
-                {atlas.transactions_url && (
-                  <a href={atlas.transactions_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
-                    Transactions
-                  </a>
-                )}
-                {atlas.wallets_url && (
-                  <a href={atlas.wallets_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
-                    Wallets
-                  </a>
-                )}
-                {atlas.contracts_url && (
-                  <a href={atlas.contracts_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
-                    Contracts
-                  </a>
-                )}
-                {atlas.latest_block_url && (
-                  <a href={atlas.latest_block_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
-                    Latest Block
-                  </a>
-                )}
-                {atlas.latest_transaction_url && (
-                  <a href={atlas.latest_transaction_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
-                    Latest Transaction
-                  </a>
-                )}
-                {atlas.node_wallet_url && (
-                  <a href={atlas.node_wallet_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
-                    Node Wallet
-                  </a>
-                )}
+              <p className="monitor-control-hint">{roleExecution?.summary || 'No execution assessment available.'}</p>
+              <div className="monitor-execution-scoreboard">
+                <article className="monitor-mini-stat monitor-mini-stat-pass">
+                  <span>Pass</span>
+                  <strong>{countByStatus(roleExecution?.checks, 'pass')}</strong>
+                </article>
+                <article className="monitor-mini-stat monitor-mini-stat-warn">
+                  <span>Warn</span>
+                  <strong>{countByStatus(roleExecution?.checks, 'warn')}</strong>
+                </article>
+                <article className="monitor-mini-stat monitor-mini-stat-fail">
+                  <span>Fail</span>
+                  <strong>{countByStatus(roleExecution?.checks, 'fail')}</strong>
+                </article>
               </div>
-            )}
-            {atlas?.latest_transaction_hash && (
-              <p className="monitor-control-hint">
-                Latest tx hash: <code>{atlas.latest_transaction_hash}</code>
-              </p>
-            )}
+              <div className="monitor-execution-table-wrap">
+                <table className="monitor-execution-table">
+                  <thead>
+                    <tr>
+                      <th>Check</th>
+                      <th>Status</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(roleExecution?.checks || []).map((check) => (
+                      <tr key={check.key}>
+                        <td>{check.label}</td>
+                        <td>
+                          <span className={`monitor-check-pill monitor-check-${check.status}`}>
+                            {check.status}
+                          </span>
+                        </td>
+                        <td>{check.detail}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="monitor-role-notes">
+              <div className="monitor-card-heading">
+                <div>
+                  <p className="monitor-card-kicker">Operational Notes</p>
+                  <h4>What This Slot Should Be Doing</h4>
+                </div>
+              </div>
+              <div className="monitor-note-stack">
+                {(nodeDetails.role_notes || []).map((note, idx) => (
+                  <p key={`${node?.machine_id}-note-${idx}`}>{note}</p>
+                ))}
+              </div>
+            </section>
+
+            <section id="control" className="monitor-control-shell">
+              <div className="monitor-card-heading">
+                <div>
+                  <p className="monitor-card-kicker">Control Plane</p>
+                  <h4>Node Actions</h4>
+                </div>
+              </div>
+              <p className="monitor-control-hint">{control?.configuration_hint || 'No control configuration found.'}</p>
+
+              <div className="monitor-control-buttons">
+                <button
+                  className="monitor-btn"
+                  disabled={!control?.start_configured || !!controlBusyAction}
+                  onClick={() => handleControlAction('start')}
+                >
+                  {controlBusyAction === 'start' ? 'Starting...' : 'Start'}
+                </button>
+                <button
+                  className="monitor-btn"
+                  disabled={!control?.stop_configured || !!controlBusyAction}
+                  onClick={() => handleControlAction('stop')}
+                >
+                  {controlBusyAction === 'stop' ? 'Stopping...' : 'Stop'}
+                </button>
+                <button
+                  className="monitor-btn"
+                  disabled={!control?.restart_configured || !!controlBusyAction}
+                  onClick={() => handleControlAction('restart')}
+                >
+                  {controlBusyAction === 'restart' ? 'Restarting...' : 'Restart'}
+                </button>
+                <button
+                  className="monitor-btn"
+                  disabled={!control?.status_configured || !!controlBusyAction}
+                  onClick={() => handleControlAction('status')}
+                >
+                  {controlBusyAction === 'status' ? 'Querying...' : 'Status'}
+                </button>
+                <button
+                  className="monitor-btn"
+                  disabled={!control?.setup_configured || !!controlBusyAction}
+                  onClick={() => handleControlAction('setup')}
+                >
+                  {controlBusyAction === 'setup' ? 'Setting Up...' : 'Setup'}
+                </button>
+                <button
+                  className="monitor-btn"
+                  disabled={!control?.export_logs_configured || !!controlBusyAction}
+                  onClick={() => handleControlAction('export_logs')}
+                >
+                  {controlBusyAction === 'export_logs' ? 'Exporting Logs...' : 'Export Logs'}
+                </button>
+                <button
+                  className="monitor-btn"
+                  disabled={!control?.view_chain_data_configured || !!controlBusyAction}
+                  onClick={() => handleControlAction('view_chain_data')}
+                >
+                  {controlBusyAction === 'view_chain_data' ? 'Loading Chain Data...' : 'View Chain Data'}
+                </button>
+                <button
+                  className="monitor-btn"
+                  disabled={!control?.export_chain_data_configured || !!controlBusyAction}
+                  onClick={() => handleControlAction('export_chain_data')}
+                >
+                  {controlBusyAction === 'export_chain_data' ? 'Exporting Chain Data...' : 'Export Chain Data'}
+                </button>
+                <button
+                  className="monitor-btn monitor-btn-primary"
+                  disabled={exportBusy || !!controlBusyAction}
+                  onClick={handleExportNodeData}
+                >
+                  {exportBusy ? 'Exporting Node Snapshot...' : 'Export Node Snapshot'}
+                </button>
+                <button
+                  className="monitor-btn monitor-btn-danger"
+                  disabled={!resetChainAction?.configured || !!controlBusyAction}
+                  onClick={() => {
+                    const approved = window.confirm(
+                      'Reset chain to genesis for this node? This stops the node, deletes local chain state, and restarts it.',
+                    );
+                    if (approved) {
+                      handleControlAction('reset_chain');
+                    }
+                  }}
+                  title="Stop node, delete chain data, and restart from genesis."
+                >
+                  {controlBusyAction === 'reset_chain' ? 'Resetting Chain...' : 'Reset Chain (Genesis)'}
+                </button>
+              </div>
+
+              {customActionsVisible.length > 0 && (
+                <div className="monitor-action-group">
+                  <h5>Custom Machine Operations</h5>
+                  <div className="monitor-control-buttons">
+                    {customActionsVisible.map((action) => (
+                      <button
+                        key={action.key}
+                        className="monitor-btn"
+                        disabled={!action.configured || !!controlBusyAction}
+                        onClick={() => handleControlAction(action.key)}
+                        title={action.description}
+                      >
+                        {controlBusyAction === action.key ? 'Running...' : action.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {roleOperations.length > 0 && (
+                <div className="monitor-action-group">
+                  <h5>Role-Specific Operations</h5>
+                  <div className="monitor-control-buttons">
+                    {roleOperations.map((action) => (
+                      <button
+                        key={action.key}
+                        className="monitor-btn"
+                        disabled={!action.configured || !!controlBusyAction}
+                        onClick={() => handleControlAction(action.key)}
+                        title={action.description}
+                      >
+                        {controlBusyAction === action.key ? 'Running...' : action.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {controlResult && (
+                <div className={`monitor-control-result ${controlResult.success ? 'monitor-control-ok' : 'monitor-control-fail'}`}>
+                  <p>
+                    <strong>Action:</strong> {controlResult.action} | <strong>Success:</strong>{' '}
+                    {String(controlResult.success)} | <strong>Exit:</strong> {controlResult.exit_code}
+                  </p>
+                  <p><strong>Command:</strong> <code>{controlResult.command}</code></p>
+                  {controlResult.stdout && (
+                    <details>
+                      <summary>stdout</summary>
+                      <pre>{controlResult.stdout}</pre>
+                    </details>
+                  )}
+                  {controlResult.stderr && (
+                    <details>
+                      <summary>stderr</summary>
+                      <pre>{controlResult.stderr}</pre>
+                    </details>
+                  )}
+                </div>
+              )}
+
+              {exportResult && (
+                <div className={`monitor-control-result ${exportResult.ok ? 'monitor-control-ok' : 'monitor-control-fail'}`}>
+                  <p>
+                    <strong>Export Success:</strong> {String(exportResult.ok)} | <strong>When:</strong>{' '}
+                    {formatLocalTimestamp(exportResult.exported_at_utc)}
+                  </p>
+                  {exportResult.ok ? (
+                    <>
+                      <p><strong>File:</strong> <code>{exportResult.file_path}</code></p>
+                      <p><strong>Bytes:</strong> {exportResult.bytes}</p>
+                    </>
+                  ) : (
+                    <p><strong>Error:</strong> {exportResult.error}</p>
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section id="atlas" className="monitor-atlas-shell">
+              <div className="monitor-execution-header">
+                <div>
+                  <p className="monitor-card-kicker">Explorer</p>
+                  <h4>Atlas Explorer Bridge</h4>
+                </div>
+                <span className={`monitor-execution-pill monitor-execution-${atlas?.enabled ? 'healthy' : 'unknown'}`}>
+                  {atlas?.enabled ? 'connected' : 'not-configured'}
+                </span>
+              </div>
+              {!atlas?.enabled ? (
+                <p className="monitor-control-hint">
+                  Atlas link integration is not configured. Set <code>ATLAS_BASE_URL</code> or
+                  <code> EXPLORER_URL</code> in <code>devnet/lean15/hosts.env</code>.
+                </p>
+              ) : (
+                <div className="monitor-atlas-links">
+                  {atlas.home_url && (
+                    <a href={atlas.home_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
+                      Atlas Home
+                    </a>
+                  )}
+                  {atlas.transactions_url && (
+                    <a href={atlas.transactions_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
+                      Transactions
+                    </a>
+                  )}
+                  {atlas.wallets_url && (
+                    <a href={atlas.wallets_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
+                      Wallets
+                    </a>
+                  )}
+                  {atlas.contracts_url && (
+                    <a href={atlas.contracts_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
+                      Contracts
+                    </a>
+                  )}
+                  {atlas.latest_block_url && (
+                    <a href={atlas.latest_block_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
+                      Latest Block
+                    </a>
+                  )}
+                  {atlas.latest_transaction_url && (
+                    <a href={atlas.latest_transaction_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
+                      Latest Transaction
+                    </a>
+                  )}
+                  {atlas.node_wallet_url && (
+                    <a href={atlas.node_wallet_url} target="_blank" rel="noreferrer" className="monitor-link-btn">
+                      Node Wallet
+                    </a>
+                  )}
+                </div>
+              )}
+              {atlas?.latest_transaction_hash && (
+                <p className="monitor-control-hint">
+                  Latest tx hash: <code>{atlas.latest_transaction_hash}</code>
+                </p>
+              )}
+            </section>
+
+            <section id="rpc" className="monitor-rpc-shell">
+              <div className="monitor-card-heading">
+                <div>
+                  <p className="monitor-card-kicker">RPC</p>
+                  <h4>Direct Diagnostic Payloads</h4>
+                </div>
+                <span className="monitor-inline-pill">
+                  {Array.isArray(nodeDetails.rpc.errors) ? nodeDetails.rpc.errors.length : 0}
+                  {' '}
+                  error(s)
+                </span>
+              </div>
+              <div className="monitor-rpc-grid">
+                <article className="monitor-rpc-card">
+                  <h4>synergy_nodeInfo</h4>
+                  <pre>{jsonPretty(nodeDetails.rpc.node_info)}</pre>
+                </article>
+                <article className="monitor-rpc-card">
+                  <h4>synergy_getNodeStatus</h4>
+                  <pre>{jsonPretty(nodeDetails.rpc.node_status)}</pre>
+                </article>
+                <article className="monitor-rpc-card">
+                  <h4>synergy_getSyncStatus</h4>
+                  <pre>{jsonPretty(nodeDetails.rpc.sync_status)}</pre>
+                </article>
+                <article className="monitor-rpc-card">
+                  <h4>synergy_getPeerInfo</h4>
+                  <pre>{jsonPretty(nodeDetails.rpc.peer_info)}</pre>
+                </article>
+                <article className="monitor-rpc-card">
+                  <h4>synergy_getValidatorActivity</h4>
+                  <pre>{jsonPretty(nodeDetails.rpc.validator_activity)}</pre>
+                </article>
+                <article className="monitor-rpc-card">
+                  <h4>synergy_getLatestBlock</h4>
+                  <pre>{jsonPretty(nodeDetails.rpc.latest_block)}</pre>
+                </article>
+                <article className="monitor-rpc-card">
+                  <h4>SXCP: relayer set + attestations</h4>
+                  <pre>{jsonPretty({ relayer_set: nodeDetails.rpc.relayer_set, attestations: nodeDetails.rpc.attestations })}</pre>
+                </article>
+              </div>
+            </section>
           </div>
 
-          <div className="monitor-rpc-grid">
-            <article className="monitor-rpc-card">
-              <h4>synergy_nodeInfo</h4>
-              <pre>{jsonPretty(nodeDetails.rpc.node_info)}</pre>
-            </article>
-            <article className="monitor-rpc-card">
-              <h4>synergy_getNodeStatus</h4>
-              <pre>{jsonPretty(nodeDetails.rpc.node_status)}</pre>
-            </article>
-            <article className="monitor-rpc-card">
-              <h4>synergy_getSyncStatus</h4>
-              <pre>{jsonPretty(nodeDetails.rpc.sync_status)}</pre>
-            </article>
-            <article className="monitor-rpc-card">
-              <h4>synergy_getPeerInfo</h4>
-              <pre>{jsonPretty(nodeDetails.rpc.peer_info)}</pre>
-            </article>
-            <article className="monitor-rpc-card">
-              <h4>synergy_getValidatorActivity</h4>
-              <pre>{jsonPretty(nodeDetails.rpc.validator_activity)}</pre>
-            </article>
-            <article className="monitor-rpc-card">
-              <h4>synergy_getLatestBlock</h4>
-              <pre>{jsonPretty(nodeDetails.rpc.latest_block)}</pre>
-            </article>
-            <article className="monitor-rpc-card">
-              <h4>SXCP: relayer set + attestations</h4>
-              <pre>{jsonPretty({ relayer_set: nodeDetails.rpc.relayer_set, attestations: nodeDetails.rpc.attestations })}</pre>
-            </article>
-          </div>
+          <aside className="monitor-node-sidecar">
+            <section className="monitor-sidecar-card">
+              <p className="monitor-card-kicker">Operator Snapshot</p>
+              <h4>At-a-Glance</h4>
+              <div className="monitor-sidecar-stat-list">
+                {healthStats.map((stat) => (
+                  <div key={stat.label} className="monitor-sidecar-stat">
+                    <span>{stat.label}</span>
+                    <strong>{stat.value}</strong>
+                  </div>
+                ))}
+              </div>
+            </section>
 
-          {Array.isArray(nodeDetails.rpc.errors) && nodeDetails.rpc.errors.length > 0 && (
-            <div className="monitor-error-box">
-              <strong>RPC diagnostics errors:</strong>
-              <p>{nodeDetails.rpc.errors.join(' | ')}</p>
-            </div>
-          )}
-        </>
+            <section className="monitor-sidecar-card">
+              <p className="monitor-card-kicker">Available Actions</p>
+              <h4>Current Action Sets</h4>
+              <div className="monitor-tag-cluster">
+                {customActionsVisible.map((action) => (
+                  <span key={action.key} className={`monitor-action-tag ${action.configured ? '' : 'monitor-action-tag-disabled'}`}>
+                    {action.label}
+                  </span>
+                ))}
+                {roleOperations.map((action) => (
+                  <span key={action.key} className={`monitor-action-tag monitor-action-tag-role ${action.configured ? '' : 'monitor-action-tag-disabled'}`}>
+                    {action.label}
+                  </span>
+                ))}
+              </div>
+            </section>
+
+            {Array.isArray(nodeDetails.rpc.errors) && nodeDetails.rpc.errors.length > 0 && (
+              <section className="monitor-sidecar-card monitor-sidecar-card-alert">
+                <p className="monitor-card-kicker">Attention</p>
+                <h4>RPC Diagnostics Errors</h4>
+                <div className="monitor-sidecar-list">
+                  {nodeDetails.rpc.errors.map((item) => (
+                    <p key={item}>{item}</p>
+                  ))}
+                </div>
+              </section>
+            )}
+          </aside>
+        </div>
       )}
     </section>
   );

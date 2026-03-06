@@ -1,39 +1,34 @@
-# Setting Up Git Remote and Pulling Changes
+# Git Remote Setup
 
-## Current Status
-- Git repository initialized
-- Remote `origin` set to: `https://github.com/synergy-network-hq/devnet-control-panel.git`
-
-## To Pull Changes
-
-The repository requires authentication. Choose one of these methods:
-
-### Option 1: Use SSH (Recommended if you have SSH keys set up)
+Repo path on this workspace:
 
 ```bash
-cd /home/devpup/Desktop/devnet-control-panel
+cd /Users/devpup/Desktop/synergy-devnet/tools/devnet-control-panel
+```
+
+Current GitHub remote:
+
+```text
+https://github.com/synergy-network-hq/devnet-control-panel.git
+```
+
+## Preferred: SSH Remote
+
+```bash
 git remote set-url origin git@github.com:synergy-network-hq/devnet-control-panel.git
 git fetch origin
-git pull origin main  # or 'master', depending on the default branch
-```
-
-### Option 2: Use HTTPS with Personal Access Token
-
-1. Create a Personal Access Token on GitHub:
-   - Go to: https://github.com/settings/tokens
-   - Generate new token (classic) with `repo` permissions
-   - Copy the token
-
-2. Pull with token:
-```bash
-cd /home/devpup/Desktop/devnet-control-panel
-git pull https://YOUR_TOKEN@github.com/synergy-network-hq/devnet-control-panel.git main
-```
-
-Or configure credential helper:
-```bash
-git config credential.helper store
 git pull origin main
+```
+
+## HTTPS Remote
+
+```bash
+git remote set-url origin https://github.com/synergy-network-hq/devnet-control-panel.git
+git fetch origin
+git pull origin main
+```
+
+If GitHub prompts repeatedly over HTTPS, configure a credential helper or switch to SSH.
 # Enter your GitHub username and use the token as password when prompted
 ```
 
@@ -76,4 +71,3 @@ Should show:
 origin  https://github.com/synergy-network-hq/devnet-control-panel.git (fetch)
 origin  https://github.com/synergy-network-hq/devnet-control-panel.git (push)
 ```
-

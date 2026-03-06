@@ -3,7 +3,7 @@ use futures_util::future::join_all;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::net::UdpSocket;
@@ -995,6 +995,7 @@ pub async fn get_monitor_node_details(machine_id: String) -> Result<MonitorNodeD
         &host_overrides,
         &node.machine_id,
         &node.node_id,
+        &node.physical_machine,
         &inventory_path,
     );
     let role_operations = build_role_operations(&node_status, &control_commands);
@@ -1454,6 +1455,7 @@ fn load_inventory_nodes(inventory_path: &Path) -> Result<Vec<MonitorNode>, Strin
 
 fn load_hosts_overrides(inventory_path: &Path) -> HashMap<String, String> {
     let mut output = HashMap::new();
+    let inventory_nodes = load_inventory_nodes(inventory_path).unwrap_or_default();
     if let Some(parent) = inventory_path.parent() {
         let hosts_file = parent.join("hosts.env");
         if hosts_file.is_file() {
@@ -1488,7 +1490,6 @@ fn load_hosts_overrides(inventory_path: &Path) -> HashMap<String, String> {
     // Security machine bindings (if configured) override hosts.env for control and diagnostics.
     if let Ok(config) = load_security_config() {
         for binding in config.machine_bindings {
-            let machine = binding.machine_id.trim().to_ascii_lowercase();
             let Some(host_override) = binding
                 .host_override
                 .as_ref()
@@ -1497,17 +1498,58 @@ fn load_hosts_overrides(inventory_path: &Path) -> HashMap<String, String> {
             else {
                 continue;
             };
-            if machine.is_empty() {
+            let targets = expand_binding_targets(binding.machine_id.as_str(), &inventory_nodes);
+            if targets.is_empty() {
                 continue;
             }
-            let machine_snake = machine.replace('-', "_");
-            output.insert(machine.clone(), host_override.clone());
-            output.insert(machine_snake.clone(), host_override.clone());
-            output.insert(format!("{machine_snake}_host"), host_override);
+            for target in targets {
+                let target_snake = target.replace('-', "_");
+                output.insert(target.clone(), host_override.clone());
+                output.insert(target_snake.clone(), host_override.clone());
+                output.insert(format!("{target_snake}_host"), host_override.clone());
+            }
         }
     }
 
     output
+}
+
+fn binding_matches_target(
+    binding_id: &str,
+    machine_id: &str,
+    node_id: &str,
+    physical_machine: &str,
+) -> bool {
+    binding_id.eq_ignore_ascii_case(machine_id)
+        || binding_id.eq_ignore_ascii_case(node_id)
+        || binding_id.eq_ignore_ascii_case(physical_machine)
+}
+
+fn expand_binding_targets(binding_id: &str, inventory_nodes: &[MonitorNode]) -> Vec<String> {
+    let normalized = binding_id.trim();
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut targets = HashSet::new();
+    targets.insert(normalized.to_ascii_lowercase());
+
+    for node in inventory_nodes {
+        if binding_matches_target(
+            normalized,
+            &node.machine_id,
+            &node.node_id,
+            &node.physical_machine,
+        ) {
+            targets.insert(node.machine_id.to_ascii_lowercase());
+            targets.insert(node.node_id.to_ascii_lowercase());
+            targets.insert(node.physical_machine.to_ascii_lowercase());
+        }
+    }
+
+    let mut ordered = targets.into_iter().collect::<Vec<_>>();
+    ordered.sort();
+    ordered
 }
 
 fn load_node_address_map(inventory_path: &Path) -> HashMap<String, String> {
@@ -2631,6 +2673,7 @@ fn resolve_control_commands(
     overrides: &HashMap<String, String>,
     machine_id: &str,
     node_id: &str,
+    physical_machine: &str,
     inventory_path: &Path,
 ) -> NodeControlCommands {
     let machine = machine_id.to_ascii_lowercase().replace('-', "_");
@@ -2728,6 +2771,10 @@ fn resolve_control_commands(
             ("install_node", "install_node"),
             ("bootstrap_node", "bootstrap_node"),
             ("reset_chain", "reset_chain"),
+            ("wireguard_install", "wireguard_install"),
+            ("wireguard_connect", "wireguard_connect"),
+            ("wireguard_disconnect", "wireguard_disconnect"),
+            ("wireguard_restart", "wireguard_restart"),
             ("wireguard_status", "wireguard_status"),
             ("node_logs", "logs"),
             // Class I — Consensus
@@ -2753,7 +2800,7 @@ fn resolve_control_commands(
         }
     }
 
-    apply_security_ssh_profile(machine_id, node_id, &mut commands);
+    apply_security_ssh_profile(machine_id, node_id, physical_machine, &mut commands);
 
     commands
 }
@@ -4690,6 +4737,10 @@ fn role_allows_control(role: &str, action: &str) -> bool {
         "install_node",
         "bootstrap_node",
         "reset_chain",
+        "wireguard_install",
+        "wireguard_connect",
+        "wireguard_disconnect",
+        "wireguard_restart",
         "rotate_vrf_key",
         "rotate_pqc_keys",
         "flush_relay_queue",
@@ -4701,14 +4752,23 @@ fn role_allows_control(role: &str, action: &str) -> bool {
         .any(|admin_action| normalized_action == *admin_action)
 }
 
-fn apply_security_ssh_profile(machine_id: &str, node_id: &str, commands: &mut NodeControlCommands) {
+fn apply_security_ssh_profile(
+    machine_id: &str,
+    node_id: &str,
+    physical_machine: &str,
+    commands: &mut NodeControlCommands,
+) {
     let Ok(config) = load_security_config() else {
         return;
     };
 
     let binding = config.machine_bindings.iter().find(|binding| {
-        binding.machine_id.eq_ignore_ascii_case(machine_id)
-            || binding.machine_id.eq_ignore_ascii_case(node_id)
+        binding_matches_target(
+            binding.machine_id.as_str(),
+            machine_id,
+            node_id,
+            physical_machine,
+        )
     });
 
     // Resolve SSH profile: prefer the machine-specific binding's profile;
@@ -4853,10 +4913,24 @@ fn select_nodes_for_scope(nodes: &[MonitorNode], scope: &str) -> Vec<String> {
             .collect::<Vec<_>>();
     }
 
+    if let Some(physical) = normalized
+        .strip_prefix("physical:")
+        .or_else(|| normalized.strip_prefix("physical_machine:"))
+    {
+        let target = physical.trim();
+        return nodes
+            .iter()
+            .filter(|node| node.physical_machine.eq_ignore_ascii_case(target))
+            .map(|node| node.machine_id.clone())
+            .collect::<Vec<_>>();
+    }
+
     nodes
         .iter()
         .filter(|node| {
-            node.machine_id.eq_ignore_ascii_case(scope) || node.node_id.eq_ignore_ascii_case(scope)
+            node.machine_id.eq_ignore_ascii_case(scope)
+                || node.node_id.eq_ignore_ascii_case(scope)
+                || node.physical_machine.eq_ignore_ascii_case(scope)
         })
         .map(|node| node.machine_id.clone())
         .collect::<Vec<_>>()
@@ -4885,6 +4959,7 @@ async fn execute_monitor_node_control(
         &host_overrides,
         &node.machine_id,
         &node.node_id,
+        &node.physical_machine,
         &inventory_path,
     );
 

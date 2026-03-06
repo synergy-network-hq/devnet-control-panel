@@ -1,14 +1,49 @@
 import { useEffect, useMemo, useState } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import { Link } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+
+function extractText(children) {
+  if (children === null || children === undefined) return '';
+  if (typeof children === 'string' || typeof children === 'number') return String(children);
+  if (Array.isArray(children)) return children.map(extractText).join('');
+  if (typeof children === 'object' && 'props' in children) {
+    return extractText(children.props?.children);
+  }
+  return '';
+}
+
+function slugifyHeading(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
 
 function HelpArticlesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [workspacePath, setWorkspacePath] = useState('');
   const [manualMarkdown, setManualMarkdown] = useState('');
+  const [appVersion, setAppVersion] = useState('');
+
+  const manualSections = useMemo(
+    () =>
+      String(manualMarkdown || '')
+        .split('\n')
+        .filter((line) => /^##\s+/.test(line))
+        .map((line) => {
+          const label = line.replace(/^##\s+/, '').trim();
+          return {
+            label,
+            id: slugifyHeading(label),
+          };
+        }),
+    [manualMarkdown],
+  );
 
   const markdownComponents = useMemo(
     () => ({
@@ -23,6 +58,38 @@ function HelpArticlesPage() {
           >
             {children}
           </a>
+        );
+      },
+      h1: ({ children, ...props }) => {
+        const id = slugifyHeading(extractText(children));
+        return (
+          <h1 id={id} {...props}>
+            {children}
+          </h1>
+        );
+      },
+      h2: ({ children, ...props }) => {
+        const id = slugifyHeading(extractText(children));
+        return (
+          <h2 id={id} {...props}>
+            {children}
+          </h2>
+        );
+      },
+      h3: ({ children, ...props }) => {
+        const id = slugifyHeading(extractText(children));
+        return (
+          <h3 id={id} {...props}>
+            {children}
+          </h3>
+        );
+      },
+      h4: ({ children, ...props }) => {
+        const id = slugifyHeading(extractText(children));
+        return (
+          <h4 id={id} {...props}>
+            {children}
+          </h4>
         );
       },
     }),
@@ -53,6 +120,28 @@ function HelpArticlesPage() {
     loadManual();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadVersion = async () => {
+      try {
+        const version = await getVersion();
+        if (!cancelled) {
+          setAppVersion(String(version || ''));
+        }
+      } catch {
+        if (!cancelled) {
+          setAppVersion('');
+        }
+      }
+    };
+
+    loadVersion();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <section className="monitor-shell help-shell">
       <div className="help-hero">
@@ -60,19 +149,30 @@ function HelpArticlesPage() {
           <p className="help-eyebrow">Synergy Devnet Operator Manual</p>
           <h2>Synergy Devnet Control Panel Help Center</h2>
           <p className="help-hero-copy">
-            This view is rendered directly from the bundled
-            {' '}
-            <code>SYNERGY_DEVNET_CONTROL_PANEL_USER_MANUAL.md</code>
-            {' '}
-            so the Help window stays aligned with the current manual.
+            This view renders the bundled operator manual directly from the current workspace, so
+            Help stays aligned with the shipped topology, control actions, and release/update flow.
           </p>
-          {workspacePath ? (
-            <p className="help-hero-copy">
-              Workspace:
+          <div className="help-hero-meta">
+            {appVersion ? (
+              <span className="help-meta-pill">
+                App
+                {' '}
+                {appVersion}
+              </span>
+            ) : null}
+            {workspacePath ? (
+              <span className="help-meta-pill">
+                Workspace
+                {' '}
+                <code>{workspacePath}</code>
+              </span>
+            ) : null}
+            <span className="help-meta-pill">
+              Manual
               {' '}
-              <code>{workspacePath}</code>
-            </p>
-          ) : null}
+              <code>guides/SYNERGY_DEVNET_CONTROL_PANEL_USER_MANUAL.md</code>
+            </span>
+          </div>
         </div>
         <div className="help-hero-actions">
           <Link className="monitor-link-btn" to="/">
@@ -91,6 +191,62 @@ function HelpArticlesPage() {
           </button>
         </div>
       </div>
+
+      <div className="help-brief-grid">
+        <article className="help-brief-card">
+          <span className="help-brief-label">Bootstrap Sequence</span>
+          <strong className="help-brief-title">WireGuard before node control</strong>
+          <p>
+            Use
+            {' '}
+            <code>wireguard_install</code>
+            {' -> '}
+            <code>wireguard_connect</code>
+            {' -> '}
+            <code>wireguard_status</code>
+            {' -> '}
+            <code>status</code>
+            {' '}
+            before expecting fleet RPC health.
+          </p>
+        </article>
+        <article className="help-brief-card">
+          <span className="help-brief-label">Binding Model</span>
+          <strong className="help-brief-title">Node slots vs physical machines</strong>
+          <p>
+            Node detail pages operate on logical
+            {' '}
+            <code>node-##</code>
+            {' '}
+            slots. Inventory rows also show the backing physical
+            {' '}
+            <code>machine-##</code>
+            {' '}
+            host for each slot.
+          </p>
+        </article>
+        <article className="help-brief-card">
+          <span className="help-brief-label">Updates</span>
+          <strong className="help-brief-title">Signed release metadata required</strong>
+          <p>
+            Installed apps poll the published
+            {' '}
+            <code>latest.json</code>
+            {' '}
+            release metadata. When a newer signed build exists, the header shows an install action.
+          </p>
+        </article>
+      </div>
+
+      {manualSections.length > 0 ? (
+        <div className="help-section-nav">
+          {manualSections.map((section) => (
+            <a key={section.id} className="help-section-chip" href={`#${section.id}`}>
+              {section.label}
+            </a>
+          ))}
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="loading-container">

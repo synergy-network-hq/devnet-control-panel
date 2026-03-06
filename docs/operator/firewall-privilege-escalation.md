@@ -1,8 +1,8 @@
-# Sudo Authentication Setup
+# Firewall Privilege Escalation
 
 ## Problem
 
-The application runs installer scripts that need to configure firewall rules (ufw/firewalld/iptables) which require sudo privileges. When run from the GUI application, sudo cannot prompt for a password interactively.
+The Synergy Devnet Control Panel runs installer/orchestration steps that may need to configure firewall rules (`ufw`, `firewalld`, `iptables`). When those steps run from the desktop app, plain `sudo` cannot always prompt interactively.
 
 ## Solution
 
@@ -67,4 +67,3 @@ If you prefer not to configure passwordless sudo, you can manually open the requ
 ## Verification
 
 After setting up passwordless sudo, the installer scripts should run without authentication errors. The firewall rules will be configured automatically when nodes are started.
-

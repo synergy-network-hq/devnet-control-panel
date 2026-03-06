@@ -9,9 +9,15 @@ const BULK_ACTIONS = [
   'restart',
   'reset_chain',
   'setup',
+  'install_node',
+  'bootstrap_node',
   'export_logs',
   'view_chain_data',
   'export_chain_data',
+  'wireguard_install',
+  'wireguard_connect',
+  'wireguard_disconnect',
+  'wireguard_restart',
   'wireguard_status',
   'rpc:get_node_status',
   'rpc:get_sync_status',
@@ -112,6 +118,14 @@ function OperatorConfigurationPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [nodes]);
 
+  const physicalMachines = useMemo(() => {
+    const set = new Set();
+    nodes.forEach((entry) => {
+      if (entry?.node?.physical_machine) set.add(String(entry.node.physical_machine));
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [nodes]);
+
   const activeRole = securityState?.active_role || 'viewer';
   const isAdmin = activeRole === 'admin';
   const operatorCount = securityState?.operators?.length || 0;
@@ -119,6 +133,38 @@ function OperatorConfigurationPage() {
   const bindingCount = securityState?.machine_bindings?.length || 0;
   const onlineNodes = snapshot?.online_nodes ?? 0;
   const totalNodes = snapshot?.total_nodes ?? 0;
+  const activeOperator = (securityState?.operators || []).find(
+    (operator) => operator.operator_id === securityState?.active_operator_id,
+  );
+  const bindingCoverage = totalNodes > 0 ? `${bindingCount}/${totalNodes}` : '0/0';
+  const guideCards = [
+    {
+      kicker: '01',
+      title: 'Choose the active operator',
+      copy: 'Set the RBAC identity first so every later action runs under the correct admin/operator scope.',
+    },
+    {
+      kicker: '02',
+      title: 'Save SSH profiles',
+      copy: 'Keep one stable profile for the fleet unless a machine truly needs a different user, key, or root path.',
+    },
+    {
+      kicker: '03',
+      title: 'Bind hosts or slots',
+      copy: 'Bindings can target physical machines or logical node slots. Use overrides only when inventory defaults are wrong.',
+    },
+    {
+      kicker: '04',
+      title: 'Run bulk control safely',
+      copy: 'WireGuard bootstrap first, then status and RPC checks. Use narrow scopes before you touch the entire fleet.',
+    },
+  ];
+  const sectionLinks = [
+    ['operator-access', 'Operator Access'],
+    ['ssh-profiles', 'SSH Profiles'],
+    ['bindings', 'Bindings'],
+    ['bulk-actions', 'Bulk Actions'],
+  ];
 
   const handleSetActiveOperator = async (operatorId) => {
     try {
@@ -247,8 +293,8 @@ function OperatorConfigurationPage() {
           <p className="monitor-hero-eyebrow">Operations + Security</p>
           <h2 className="monitor-hero-title">Synergy Devnet Control Panel Settings</h2>
           <p className="monitor-hero-summary">
-            Manage operator identity, SSH reachability, node slot bindings, and fleet-wide control
-            actions from one place.
+            Manage operator identity, SSH reachability, control bindings, and fleet-wide actions
+            from one deliberate operations surface.
           </p>
           <div className="monitor-inline-pills">
             <span className="monitor-inline-pill monitor-inline-pill-healthy">
@@ -261,6 +307,11 @@ function OperatorConfigurationPage() {
               Snapshot
               {' '}
               {formatLocalTimestamp(snapshot?.captured_at_utc)}
+            </span>
+            <span className="monitor-inline-pill">
+              Coverage
+              {' '}
+              {bindingCoverage}
             </span>
           </div>
           <p className="monitor-path">
@@ -280,11 +331,11 @@ function OperatorConfigurationPage() {
       </div>
 
       <div className="monitor-stat-grid">
-        <article className="monitor-stat-card">
+        <article className="monitor-stat-card monitor-stat-card-healthy">
           <span className="monitor-stat-label">Node Slots</span>
           <strong className="monitor-stat-value">{totalNodes}</strong>
         </article>
-        <article className="monitor-stat-card">
+        <article className="monitor-stat-card monitor-stat-card-healthy">
           <span className="monitor-stat-label">Online Now</span>
           <strong className="monitor-stat-value">{onlineNodes}</strong>
         </article>
@@ -296,49 +347,29 @@ function OperatorConfigurationPage() {
           <span className="monitor-stat-label">SSH Profiles</span>
           <strong className="monitor-stat-value">{profileCount}</strong>
         </article>
-        <article className="monitor-stat-card">
-          <span className="monitor-stat-label">Bound Slots</span>
-          <strong className="monitor-stat-value">{bindingCount}</strong>
+        <article className="monitor-stat-card monitor-stat-card-degraded">
+          <span className="monitor-stat-label">Binding Coverage</span>
+          <strong className="monitor-stat-value">{bindingCoverage}</strong>
         </article>
       </div>
 
-      <article className="monitor-panel monitor-panel-guide monitor-panel-span-3">
-        <h3>How To Use This Page</h3>
-        <p className="monitor-path">
-          1) Set
-          {' '}
-          <strong>Active Operator</strong>
-          {' '}
-          first.
-          2) Configure
-          {' '}
-          <strong>SSH Profiles</strong>
-          .
-          3) Bind node slots in
-          {' '}
-          <strong>Node Slot Binding</strong>
-          .
-          4) Run
-          {' '}
-          <strong>Fleet Bulk Actions</strong>
-          .
-        </p>
-        <p className="monitor-path">
-          Recommended defaults:
-          {' '}
-          <code>profile_id=ops</code>
-          ,
-          {' '}
-          <code>ssh_user=ops</code>
-          ,
-          {' '}
-          <code>ssh_port=22</code>
-          ,
-          {' '}
-          <code>remote_root=/opt/synergy</code>
-          .
-        </p>
-      </article>
+      <nav className="monitor-section-nav">
+        {sectionLinks.map(([id, label]) => (
+          <a key={id} className="monitor-section-nav-chip" href={`#${id}`}>
+            {label}
+          </a>
+        ))}
+      </nav>
+
+      <div className="monitor-settings-guide-grid">
+        {guideCards.map((card) => (
+          <article key={card.kicker} className="monitor-settings-guide-card">
+            <span className="monitor-settings-guide-kicker">{card.kicker}</span>
+            <strong>{card.title}</strong>
+            <p>{card.copy}</p>
+          </article>
+        ))}
+      </div>
 
       {error && (
         <div className="monitor-error-box">
@@ -349,22 +380,17 @@ function OperatorConfigurationPage() {
       )}
 
       <div className="monitor-admin-grid">
-        <article className="monitor-panel monitor-panel-emphasis">
-          <h3>Operator Access (RBAC)</h3>
+        <article id="operator-access" className="monitor-panel monitor-panel-emphasis">
+          <div className="monitor-card-heading">
+            <div>
+              <p className="monitor-card-kicker">RBAC</p>
+              <h3>Operator Access</h3>
+            </div>
+            <span className="monitor-inline-pill">{activeOperator?.display_name || 'No active operator'}</span>
+          </div>
           <p className="monitor-path">
-            <strong>Set Active Operator:</strong>
-            {' '}
-            choose who is currently issuing actions.
-          </p>
-          <p className="monitor-path">
-            <strong>Field presets:</strong>
-            {' '}
-            <code>operator_id</code>
-            {' '}
-            should be lowercase and stable (example:
-            {' '}
-            <code>ops_lead</code>
-            ).
+            Set the active identity before running any control action. Admin is required for
+            security configuration and destructive fleet operations.
           </p>
           <label className="monitor-field">
             Active Operator
@@ -408,39 +434,48 @@ function OperatorConfigurationPage() {
             </button>
           </div>
 
-          <div className="monitor-chip-row">
+          <div className="monitor-record-list">
             {(securityState?.operators || []).map((operator) => (
-              <div key={operator.operator_id} className="monitor-chip">
-                <span>
-                  {operator.display_name}
-                  {' '}
-                  (
-                  {operator.role}
-                  )
-                </span>
-                {isAdmin && operator.operator_id !== securityState?.active_operator_id ? (
-                  <button onClick={() => handleDeleteOperator(operator.operator_id)}>remove</button>
-                ) : null}
+              <div key={operator.operator_id} className="monitor-record-row">
+                <div className="monitor-record-copy">
+                  <strong>{operator.display_name}</strong>
+                  <span>
+                    {operator.operator_id}
+                    {' · '}
+                    {operator.role}
+                    {' · updated '}
+                    {formatLocalTimestamp(operator.updated_at_utc)}
+                  </span>
+                </div>
+                <div className="monitor-record-actions">
+                  {operator.operator_id === securityState?.active_operator_id ? (
+                    <span className="monitor-action-tag monitor-action-tag-role">active</span>
+                  ) : null}
+                  {isAdmin && operator.operator_id !== securityState?.active_operator_id ? (
+                    <button className="monitor-btn" onClick={() => handleDeleteOperator(operator.operator_id)}>
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
         </article>
 
-        <article className="monitor-panel monitor-panel-span-2">
-          <h3>SSH Profiles</h3>
+        <article id="ssh-profiles" className="monitor-panel monitor-panel-span-2">
+          <div className="monitor-card-heading">
+            <div>
+              <p className="monitor-card-kicker">Transport</p>
+              <h3>SSH Profiles</h3>
+            </div>
+            <span className="monitor-inline-pill">{profileCount} profile(s)</span>
+          </div>
           <p className="monitor-path">
-            Saving an SSH profile does not generate SSH keys. Create keys manually first, then set
-            {' '}
-            <code>ssh_key_path</code>
-            {' '}
-            to the private key file.
-          </p>
-          <p className="monitor-path">
-            Recommended profile template:
+            Recommended baseline:
             {' '}
             <code>ops / Ops SSH Profile / ops / 22 / ~/.ssh/id_ed25519 /opt/synergy</code>
           </p>
-          <div className="monitor-form-grid">
+          <div className="monitor-form-grid monitor-form-grid-wide">
             <input
               placeholder="profile_id"
               value={newSshProfile.profile_id}
@@ -476,44 +511,78 @@ function OperatorConfigurationPage() {
             Save SSH Profile
           </button>
 
-          <div className="monitor-chip-row">
+          <div className="monitor-record-list">
             {(securityState?.ssh_profiles || []).map((profile) => (
-              <div key={profile.profile_id} className="monitor-chip">
-                <span>
-                  {profile.label}
-                  {' '}
-                  (
-                  {profile.ssh_user}
-                  @:
-                  {profile.ssh_port}
-                  )
-                </span>
-                {isAdmin ? (
-                  <button onClick={() => handleDeleteSshProfile(profile.profile_id)}>remove</button>
-                ) : null}
+              <div key={profile.profile_id} className="monitor-record-row">
+                <div className="monitor-record-copy">
+                  <strong>{profile.label}</strong>
+                  <span>
+                    {profile.profile_id}
+                    {' · '}
+                    {profile.ssh_user}
+                    {' @ '}
+                    {profile.ssh_port}
+                    {' · root '}
+                    {profile.remote_root || '/opt/synergy'}
+                  </span>
+                </div>
+                <div className="monitor-record-actions">
+                  {profile.ssh_key_path ? (
+                    <span className="monitor-action-tag">keyed</span>
+                  ) : (
+                    <span className="monitor-action-tag monitor-action-tag-disabled">no key path</span>
+                  )}
+                  {isAdmin ? (
+                    <button className="monitor-btn" onClick={() => handleDeleteSshProfile(profile.profile_id)}>
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
+        </article>
 
-          <h4>Node Slot Binding</h4>
+        <article id="bindings" className="monitor-panel monitor-panel-span-2">
+          <div className="monitor-card-heading">
+            <div>
+              <p className="monitor-card-kicker">Reachability</p>
+              <h3>Bindings</h3>
+            </div>
+            <span className="monitor-inline-pill">{bindingCoverage}</span>
+          </div>
           <p className="monitor-path">
-            Bind every node slot to one SSH profile unless a host-specific override is required.
+            Bind by physical machine when one host serves multiple slots. Bind by node slot when a
+            specific logical node needs an exception.
           </p>
-          <div className="monitor-form-grid">
+          <div className="monitor-form-grid monitor-form-grid-wide">
             <select
               value={newBinding.machine_id}
               onChange={(event) => setNewBinding((prev) => ({ ...prev, machine_id: event.target.value }))}
             >
-              <option value="">Select node slot</option>
-              {nodes.map((entry) => (
-                <option key={entry.node.machine_id} value={entry.node.machine_id}>
-                  {entry.node.machine_id}
-                  {' '}
-                  (
-                  {entry.node.physical_machine || 'unassigned host'}
-                  )
-                </option>
-              ))}
+              <option value="">Select binding target</option>
+              {physicalMachines.length > 0 && (
+                <optgroup label="Physical Machines">
+                  {physicalMachines.map((machineId) => (
+                    <option key={machineId} value={machineId}>
+                      {machineId}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {nodes.length > 0 && (
+                <optgroup label="Node Slots">
+                  {nodes.map((entry) => (
+                    <option key={entry.node.machine_id} value={entry.node.machine_id}>
+                      {entry.node.machine_id}
+                      {' '}
+                      (
+                      {entry.node.physical_machine || 'unassigned host'}
+                      )
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             <select
               value={newBinding.profile_id}
@@ -538,40 +607,68 @@ function OperatorConfigurationPage() {
             />
           </div>
           <button className="monitor-btn" onClick={handleAssignBinding} disabled={!isAdmin}>
-            Bind Node Slot
+            Save Binding
           </button>
 
-          <div className="monitor-chip-row">
+          <div className="monitor-record-list">
             {(securityState?.machine_bindings || []).map((binding) => (
-              <div key={binding.machine_id} className="monitor-chip">
-                <span>
-                  {binding.machine_id}
-                  {' -> '}
-                  {binding.profile_id}
-                </span>
-                {isAdmin ? (
-                  <button onClick={() => handleRemoveBinding(binding.machine_id)}>remove</button>
-                ) : null}
+              <div key={binding.machine_id} className="monitor-record-row">
+                <div className="monitor-record-copy">
+                  <strong>{binding.machine_id}</strong>
+                  <span>
+                    profile {binding.profile_id}
+                    {binding.host_override ? ` · host ${binding.host_override}` : ''}
+                    {binding.remote_dir_override ? ` · dir ${binding.remote_dir_override}` : ''}
+                  </span>
+                </div>
+                <div className="monitor-record-actions">
+                  {isAdmin ? (
+                    <button className="monitor-btn" onClick={() => handleRemoveBinding(binding.machine_id)}>
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
         </article>
 
-        <article className="monitor-panel monitor-panel-span-3">
-          <h3>Fleet Bulk Actions</h3>
-          <p className="monitor-path">
-            Recommended startup sequence:
-            {' '}
-            <code>wireguard_install</code>
-            {' -> '}
-            <code>wireguard_connect</code>
-            {' -> '}
-            <code>wireguard_status</code>
-            {' -> '}
-            <code>status</code>
-            .
-          </p>
-          <div className="monitor-form-grid">
+        <article id="bulk-actions" className="monitor-panel monitor-panel-span-3 monitor-panel-guide">
+          <div className="monitor-card-heading">
+            <div>
+              <p className="monitor-card-kicker">Fleet Control</p>
+              <h3>Bulk Actions</h3>
+            </div>
+            <span className={`monitor-inline-pill monitor-inline-pill-${bulkBusy ? 'degraded' : 'healthy'}`}>
+              {bulkBusy ? 'running' : 'ready'}
+            </span>
+          </div>
+          <div className="monitor-settings-guide-grid monitor-settings-guide-grid-compact">
+            <article className="monitor-settings-guide-card">
+              <span className="monitor-settings-guide-kicker">Safe Sequence</span>
+              <strong>WireGuard bootstrap first</strong>
+              <p>
+                <code>wireguard_install</code>
+                {' -> '}
+                <code>wireguard_connect</code>
+                {' -> '}
+                <code>wireguard_status</code>
+                {' -> '}
+                <code>status</code>
+              </p>
+            </article>
+            <article className="monitor-settings-guide-card">
+              <span className="monitor-settings-guide-kicker">Scope</span>
+              <strong>Prefer narrow scopes</strong>
+              <p>Use role-group or physical-machine scopes before you escalate to `all`.</p>
+            </article>
+            <article className="monitor-settings-guide-card">
+              <span className="monitor-settings-guide-kicker">Readback</span>
+              <strong>Watch result counts</strong>
+              <p>Success and failure counts tell you quickly whether the issue is auth, reachability, or node runtime.</p>
+            </article>
+          </div>
+          <div className="monitor-form-grid monitor-form-grid-wide">
             <select value={bulkAction} onChange={(event) => setBulkAction(event.target.value)}>
               {BULK_ACTIONS.map((action) => (
                 <option key={action} value={action}>
@@ -582,12 +679,24 @@ function OperatorConfigurationPage() {
 
             <select value={bulkScope} onChange={(event) => setBulkScope(event.target.value)}>
               <option value="all">all</option>
-              {roleGroups.map((group) => (
-                <option key={group} value={`role_group:${group}`}>
-                  role_group:
-                  {group}
-                </option>
-              ))}
+              {roleGroups.length > 0 && (
+                <optgroup label="Role Groups">
+                  {roleGroups.map((group) => (
+                    <option key={group} value={`role_group:${group}`}>
+                      role_group:{group}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {physicalMachines.length > 0 && (
+                <optgroup label="Physical Machines">
+                  {physicalMachines.map((machineId) => (
+                    <option key={machineId} value={machineId}>
+                      {machineId}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
 
@@ -604,33 +713,41 @@ function OperatorConfigurationPage() {
           ) : null}
 
           {bulkResult && !bulkResult.error ? (
-            <div className="monitor-bulk-result">
-              <p>
-                Action
-                {' '}
-                <code>{bulkResult.action}</code>
-                {' '}
-                on
-                {' '}
-                <code>{bulkResult.scope}</code>
-                {' | '}
-                success:
-                {' '}
-                <strong>{bulkResult.succeeded}</strong>
-                {' | '}
-                failed:
-                {' '}
-                <strong>{bulkResult.failed}</strong>
-              </p>
-              <div className="monitor-chip-row">
+            <div className="monitor-bulk-result monitor-bulk-result-shell">
+              <div className="monitor-bulk-result-summary">
+                <div>
+                  <span>Action</span>
+                  <strong>{bulkResult.action}</strong>
+                </div>
+                <div>
+                  <span>Scope</span>
+                  <strong>{bulkResult.scope}</strong>
+                </div>
+                <div>
+                  <span>Succeeded</span>
+                  <strong>{bulkResult.succeeded}</strong>
+                </div>
+                <div>
+                  <span>Failed</span>
+                  <strong>{bulkResult.failed}</strong>
+                </div>
+              </div>
+              <div className="monitor-record-list">
                 {(bulkResult.results || []).slice(0, 20).map((result) => (
-                  <div key={`${result.machine_id}-${result.executed_at_utc}`} className="monitor-chip">
-                    <span>
-                      {result.machine_id}
-                      :
-                      {' '}
-                      {result.success ? 'ok' : `fail (${result.exit_code})`}
-                    </span>
+                  <div key={`${result.machine_id}-${result.executed_at_utc}`} className="monitor-record-row">
+                    <div className="monitor-record-copy">
+                      <strong>{result.machine_id}</strong>
+                      <span>
+                        exit {result.exit_code}
+                        {' · '}
+                        {formatLocalTimestamp(result.executed_at_utc)}
+                      </span>
+                    </div>
+                    <div className="monitor-record-actions">
+                      <span className={`monitor-action-tag ${result.success ? 'monitor-action-tag-role' : 'monitor-action-tag-disabled'}`}>
+                        {result.success ? 'ok' : 'failed'}
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>

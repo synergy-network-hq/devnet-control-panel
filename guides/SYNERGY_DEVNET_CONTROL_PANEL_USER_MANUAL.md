@@ -1,7 +1,7 @@
 # Synergy Devnet Control Panel User Manual
 
-Version: 2026-02-28
-Applies to: `tools/devnet-control-panel` (desktop app + `devnet/lean15` closed-devnet profile)
+Version: 2026-03-06
+Applies to: `tools/devnet-control-panel` (desktop app + `devnet/lean15` closed-devnet profile, 23 active node slots across 13 physical machines)
 
 ## Table of Contents
 
@@ -138,14 +138,14 @@ From `config/genesis.json`:
 
 ## 4. Full Node/Port/RPC Inventory
 
-### 4.1 Port ranges used by this 15-node profile
+### 4.1 Port ranges used by the current active slot map
 
-- P2P: `38638-38652`
-- RPC (HTTP): `48638-48652`
-- WebSocket: `58638-58652`
-- gRPC: `50051-50065`
-- Discovery (reserved, disabled): `39638-39652`
-- WireGuard listen ports (generated mesh default): `51820-51834`
+- P2P: `38638-38662`
+- RPC (HTTP): `48638-48662`
+- WebSocket: `58638-58662`
+- gRPC: `50051-50075`
+- Discovery (reserved, disabled): `39638-39662`
+- WireGuard listen ports (generated mesh default): `51820-51832`
 
 ### 4.2 Public-facing devnet service endpoints (Atlas/clients)
 
@@ -161,7 +161,7 @@ Use these only when ingress is intentionally configured for external access:
 - Indexer API: `https://devnet-indexer.synergy-network.io`
 - Faucet: `https://devnet-faucet.synergy-network.io`
 
-### 4.3 Authoritative 25-node slot map
+### 4.3 Authoritative active node-slot map
 
 | Node Slot | Alias | Role Group | Role | Node Type | Physical Machine | VPN IP | P2P | RPC | WS | Auto Validator | Pruning | VRF |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -494,10 +494,13 @@ Install generated `.msi` or setup `.exe` from `src-tauri\target\release\bundle\`
 
 ### 6.4 Update channel behavior
 
-`Check Updates` works only after configuring:
+`Check Updates` is wired to the published signed release metadata URL configured in `src-tauri/tauri.conf.json`.
 
-- `src-tauri/tauri.conf.json` -> `plugins.updater.endpoints`
-- `src-tauri/tauri.conf.json` -> `plugins.updater.pubkey`
+Operator expectation:
+
+1. bump the app version before tagging a release
+2. publish a signed release so `latest.json` and updater signatures exist
+3. installed apps poll the release metadata and show an install prompt when a newer version is available
 
 ---
 
@@ -508,7 +511,7 @@ Install generated `.msi` or setup `.exe` from `src-tauri\target\release\bundle\`
 1. Open app and confirm dashboard loads.
 2. Confirm inventory path resolves to `<workspace>/devnet/lean15/node-inventory.csv`.
 3. Open `Settings` -> `Operator Configuration` and confirm active operator is `local_admin (admin)`.
-4. Confirm all 15 machine rows appear on dashboard.
+4. Confirm all 23 active node-slot rows appear on dashboard.
 5. Confirm `<workspace>/devnet/lean15/hosts.env` exists.
 6. Run hosts generator once:
 
@@ -564,7 +567,7 @@ Critical rules:
 1. `MACHINE_XX_HOST` must be reachable before WireGuard exists (LAN/public IP/DNS).
 2. `MACHINE_XX_VPN_IP` remains in the `10.50.0.0/24` range.
 3. If `generate-monitor-hosts-env.sh` outputs `HOST == VPN_IP`, treat as placeholder and edit it.
-4. If only machine-01 exists, edit machine-01 only and avoid `scope=all` bulk operations.
+4. If only machine-01 exists, edit that host only and avoid `scope=all` bulk operations.
 
 Machine-01 on the operator device:
 
@@ -603,7 +606,7 @@ Recommended bulk sequence:
 
 Scope guidance:
 
-- Early bootstrap (only machine-01 online): run per-machine (`machine-01`) scope.
+- Early bootstrap (only machine-01 online): run per-node-slot (`node-01`) scope.
 - Use `all` only after all target machines have real `HOST` values and are reachable.
 
 ### 8.6 Provision/start nodes in deterministic order
@@ -875,11 +878,11 @@ Then set SSH profile fields:
 - `ssh_port=22`
 - `remote_root=/opt/synergy`
 
-### 12.3 Machine binding setup
+### 12.3 Node-slot binding setup
 
 | Field | Required | Recommended input | Notes |
 | --- | --- | --- | --- |
-| `machine_id` | Yes | e.g. `machine-06` | Must match inventory |
+| `machine_id` | Yes | e.g. `node-06` | This field currently stores the inventory node-slot id |
 | `profile_id` | Yes | `ops` | Existing SSH profile |
 | `host_override` | Optional | blank unless needed | Overrides hosts.env for this machine |
 | `remote_dir_override` | Optional | blank unless needed | Overrides `<remote_root>/<machine-id>` |
@@ -891,11 +894,11 @@ Recommended policy:
 
 Step-by-step:
 
-1. Select `machine_id` from inventory list (for example `machine-01`).
+1. Select `machine_id` from inventory list (for example `node-01`).
 2. Select `profile_id` (`ops` recommended).
 3. Leave `host_override` blank unless host differs from `hosts.env`.
 4. Leave `remote_dir_override` blank unless host uses a custom directory.
-5. Save binding and repeat for all 15 machines.
+5. Save binding and repeat for all required node slots.
 
 ### 12.4 Fleet Bulk Actions setup and presets
 
@@ -1148,18 +1151,18 @@ Optional flags:
 
 - Confirm `devnet/lean15/wireguard/configs/<machine-id>.conf` exists.
 - Confirm remote `wg` + `wg-quick`.
-- Confirm UDP `51820-51834` path is open.
+- Confirm UDP `51820-51832` path is open.
 - Confirm `MACHINE_XX_HOST` is a real bootstrap-reachable host (not unresolved placeholder).
 - Confirm `MACHINE_XX_HOST` and `MACHINE_XX_VPN_IP` are not blindly identical unless intentionally reachable.
 
-### 18.4 `machine-01: command not found` or script actions fail immediately
+### 18.4 `node-01: command not found` or script actions fail immediately
 
 - Ensure commands are run from `<workspace>` (not from random directories).
 - Use the canonical form with script path:
 
 ```bash
 cd ~/.synergy-devnet-control-panel/monitor-workspace
-./scripts/devnet15/remote-node-orchestrator.sh machine-01 status
+./scripts/devnet15/remote-node-orchestrator.sh node-01 status
 ```
 
 - Regenerate hosts inventory if command variables are stale:
@@ -1223,7 +1226,7 @@ Help opens second window (`help-articles-window`) and falls back to `/#/help` ro
 
 ## 19. Known Gaps and Manual Work Remaining
 
-1. OTA update endpoints/signing key still require release infrastructure setup.
+1. App updates depend on a published signed release (`latest.json` plus signatures) being available at the configured updater endpoint.
 2. Native Windows remote WG automation remains limited by orchestrator assumptions.
 3. RBAC and audit are local per workspace unless externally synchronized.
 4. PQC-specific counters remain partially inferred from available RPC payloads.
