@@ -4349,6 +4349,18 @@ fn agent_endpoint_for_node(node: &MonitorNode) -> Option<String> {
     Some(format!("http://{host}:{DEVNET_AGENT_PORT}"))
 }
 
+/// Actions that involve stopping/starting a node binary (chain reset, install, setup)
+/// can take 60-300 seconds — far beyond the default 12 s. Use a long timeout so the
+/// HTTP request waits for the agent to finish instead of timing out and triggering the
+/// SSH fallback (which uses Rob-specific hardcoded paths and would fail on other machines).
+fn agent_request_timeout(action: &str) -> Duration {
+    match action {
+        "reset_chain" | "install_node" | "bootstrap_node" | "setup_node" | "start"
+        | "restart" => Duration::from_secs(300),
+        _ => Duration::from_secs(30),
+    }
+}
+
 async fn try_execute_monitor_agent_control(
     node: &MonitorNode,
     action: &str,
@@ -4358,7 +4370,7 @@ async fn try_execute_monitor_agent_control(
     };
 
     let client = Client::builder()
-        .timeout(Duration::from_secs(12))
+        .timeout(agent_request_timeout(action))
         .connect_timeout(Duration::from_secs(2))
         .build()
         .unwrap_or_else(|_| Client::new());

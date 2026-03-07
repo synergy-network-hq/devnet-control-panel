@@ -142,19 +142,30 @@ async fn control_handler(
             .into_response();
     }
 
-    match execute_control(&state.workspace_root, input) {
-        Ok(result) => (
-            if result.success {
+    // `execute_control` can block for several minutes (reset_chain runs stop + rm + start).
+    // Offload to a blocking thread pool so the async executor stays responsive.
+    let workspace_root = state.workspace_root.clone();
+    let result = tokio::task::spawn_blocking(move || execute_control(&workspace_root, input))
+        .await;
+
+    match result {
+        Ok(Ok(outcome)) => (
+            if outcome.success {
                 StatusCode::OK
             } else {
                 StatusCode::BAD_REQUEST
             },
-            Json(serde_json::to_value(result).unwrap_or_default()),
+            Json(serde_json::to_value(outcome).unwrap_or_default()),
         )
             .into_response(),
-        Err(error) => (
+        Ok(Err(error)) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+        Err(join_error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("agent task panicked: {join_error}") })),
         )
             .into_response(),
     }

@@ -23,6 +23,12 @@ function NetworkMonitorDashboard() {
   const [resetBusy, setResetBusy] = useState(false);
   const [resetResult, setResetResult] = useState(null);
 
+  // Global fleet control state (stop all / start all / restart all)
+  const [fleetAction, setFleetAction] = useState(null); // 'stop' | 'start' | 'restart'
+  const [fleetConfirmOpen, setFleetConfirmOpen] = useState(false);
+  const [fleetBusy, setFleetBusy] = useState(false);
+  const [fleetResult, setFleetResult] = useState(null);
+
   const fetchSnapshot = async (silent = false) => {
     if (!silent) setLoading(true);
     try {
@@ -70,6 +76,31 @@ function NetworkMonitorDashboard() {
     } finally {
       setResetBusy(false);
       setResetConfirmOpen(false);
+    }
+  };
+
+  const handleFleetConfirm = (action) => {
+    setFleetAction(action);
+    setFleetResult(null);
+    setFleetConfirmOpen(true);
+  };
+
+  const handleGlobalFleet = async () => {
+    if (!fleetAction) return;
+    setFleetBusy(true);
+    setFleetResult(null);
+    try {
+      const result = await invoke('monitor_bulk_node_control', {
+        action: fleetAction,
+        scope: 'all',
+      });
+      setFleetResult({ action: fleetAction, ...result });
+      await fetchSnapshot(true);
+    } catch (err) {
+      setFleetResult({ action: fleetAction, error: String(err) });
+    } finally {
+      setFleetBusy(false);
+      setFleetConfirmOpen(false);
     }
   };
 
@@ -122,9 +153,33 @@ function NetworkMonitorDashboard() {
             Refresh Now
           </button>
           <button
+            className="monitor-btn monitor-btn-success"
+            onClick={() => handleFleetConfirm('start')}
+            disabled={fleetBusy || resetBusy}
+            title="Start all nodes across all machines"
+          >
+            {fleetBusy && fleetAction === 'start' ? 'Starting...' : 'Start All'}
+          </button>
+          <button
+            className="monitor-btn"
+            onClick={() => handleFleetConfirm('stop')}
+            disabled={fleetBusy || resetBusy}
+            title="Stop all nodes across all machines"
+          >
+            {fleetBusy && fleetAction === 'stop' ? 'Stopping...' : 'Stop All'}
+          </button>
+          <button
+            className="monitor-btn monitor-btn-primary"
+            onClick={() => handleFleetConfirm('restart')}
+            disabled={fleetBusy || resetBusy}
+            title="Restart all nodes across all machines"
+          >
+            {fleetBusy && fleetAction === 'restart' ? 'Restarting...' : 'Restart All'}
+          </button>
+          <button
             className="monitor-btn monitor-btn-danger"
             onClick={() => setResetConfirmOpen(true)}
-            disabled={resetBusy}
+            disabled={resetBusy || fleetBusy}
             title="Reset all machines back to genesis block"
           >
             {resetBusy ? 'Resetting...' : 'Reset Chain to Genesis'}
@@ -197,6 +252,70 @@ function NetworkMonitorDashboard() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Fleet Action Confirmation Dialog */}
+      {fleetConfirmOpen && fleetAction && (
+        <div className="monitor-confirm-overlay">
+          <div className="monitor-confirm-dialog">
+            <h3>
+              {fleetAction === 'stop' && 'Stop All Nodes'}
+              {fleetAction === 'start' && 'Start All Nodes'}
+              {fleetAction === 'restart' && 'Restart All Nodes'}
+            </h3>
+            <p>
+              This will send a
+              {' '}
+              <code>{fleetAction}</code>
+              {' '}
+              command to
+              {' '}
+              <strong>all {snapshot?.total_nodes ?? 0} nodes</strong>
+              {' '}
+              across all machines.
+            </p>
+            <div className="monitor-confirm-actions">
+              <button
+                className="monitor-btn"
+                onClick={() => setFleetConfirmOpen(false)}
+                disabled={fleetBusy}
+              >
+                Cancel
+              </button>
+              <button
+                className={`monitor-btn ${fleetAction === 'stop' ? '' : 'monitor-btn-primary'}`}
+                onClick={handleGlobalFleet}
+                disabled={fleetBusy}
+              >
+                {fleetBusy
+                  ? `${fleetAction.charAt(0).toUpperCase()}${fleetAction.slice(1)}ing All Nodes...`
+                  : `Confirm: ${fleetAction.charAt(0).toUpperCase()}${fleetAction.slice(1)} All Nodes`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fleet Action Result Banner */}
+      {fleetResult && !fleetResult.error && (
+        <div className="monitor-success-box">
+          <strong>
+            {fleetResult.action
+              ? `${fleetResult.action.charAt(0).toUpperCase()}${fleetResult.action.slice(1)} complete:`
+              : 'Fleet action complete:'}
+          </strong>
+          {' '}
+          {fleetResult.succeeded} succeeded, {fleetResult.failed} failed across {fleetResult.requested_nodes} nodes.
+          <button className="monitor-dismiss-btn" onClick={() => setFleetResult(null)}>✕</button>
+        </div>
+      )}
+      {fleetResult?.error && (
+        <div className="monitor-error-box">
+          <strong>Fleet action failed:</strong>
+          {' '}
+          {truncate(fleetResult.error, 260)}
+          <button className="monitor-dismiss-btn" onClick={() => setFleetResult(null)}>✕</button>
         </div>
       )}
 
