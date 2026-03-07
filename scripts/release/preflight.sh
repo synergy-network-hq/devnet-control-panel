@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 REPO_SLUG="synergy-network-hq/devnet-control-panel"
 DEFAULT_KEY_PATH="$HOME/.synergy-devnet-control-panel/updater.key"
 KEY_INPUT="${TAURI_SIGNING_PRIVATE_KEY:-$DEFAULT_KEY_PATH}"
+REQUIRE_LOCAL_SIGNING="${RELEASE_PREFLIGHT_REQUIRE_LOCAL_SIGNING:-0}"
 
 echo "== Release preflight =="
 echo "Repo: $REPO_SLUG"
@@ -77,12 +78,10 @@ done
 
 echo "GitHub secrets: OK"
 
-if [[ ! -f "$KEY_INPUT" && -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
-  echo "No local updater signing key found at $DEFAULT_KEY_PATH and TAURI_SIGNING_PRIVATE_KEY is unset." >&2
-  exit 1
+HAS_LOCAL_SIGNING_KEY="false"
+if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" || -f "$KEY_INPUT" ]]; then
+  HAS_LOCAL_SIGNING_KEY="true"
 fi
-
-TAURI_SIGNING_PRIVATE_KEY="$KEY_INPUT" ./scripts/verify-signing-key.sh
 
 echo "Frontend build..."
 npm run build
@@ -90,28 +89,39 @@ npm run build
 echo "Rust compile check..."
 cargo check --manifest-path src-tauri/Cargo.toml
 
-HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
-BUILD_ARGS=()
-ARTIFACT_ROOT="src-tauri/target/release/bundle"
-KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-${TAURI_PRIVATE_KEY_PASSWORD:-}}"
+if [[ "$HAS_LOCAL_SIGNING_KEY" == "true" ]]; then
+  TAURI_SIGNING_PRIVATE_KEY="$KEY_INPUT" ./scripts/verify-signing-key.sh
 
-if [[ "$HOST_TARGET" == "aarch64-apple-darwin" ]]; then
-  BUILD_ARGS=(--target "$HOST_TARGET")
-  ARTIFACT_ROOT="src-tauri/target/${HOST_TARGET}/release/bundle"
-fi
+  HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
+  BUILD_ARGS=()
+  ARTIFACT_ROOT="src-tauri/target/release/bundle"
+  KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-${TAURI_PRIVATE_KEY_PASSWORD:-}}"
 
-echo "Local signed bundle build (${HOST_TARGET})..."
-TAURI_SIGNING_PRIVATE_KEY="$KEY_INPUT" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$KEY_PASSWORD" npx tauri build "${BUILD_ARGS[@]}"
+  if [[ "$HOST_TARGET" == "aarch64-apple-darwin" ]]; then
+    BUILD_ARGS=(--target "$HOST_TARGET")
+    ARTIFACT_ROOT="src-tauri/target/${HOST_TARGET}/release/bundle"
+  fi
 
-MAC_UPDATER_BUNDLE="$(find "$ARTIFACT_ROOT/macos" -maxdepth 1 -type f -name '*.app.tar.gz' | head -n 1 || true)"
-MAC_UPDATER_SIG="$(find "$ARTIFACT_ROOT/macos" -maxdepth 1 -type f -name '*.app.tar.gz.sig' | head -n 1 || true)"
+  echo "Local signed bundle build (${HOST_TARGET})..."
+  TAURI_SIGNING_PRIVATE_KEY="$KEY_INPUT" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$KEY_PASSWORD" npx tauri build "${BUILD_ARGS[@]}"
 
-if [[ -z "$MAC_UPDATER_BUNDLE" || -z "$MAC_UPDATER_SIG" ]]; then
-  echo "Local macOS updater artifacts were not produced." >&2
-  echo "Expected files under $ARTIFACT_ROOT/macos" >&2
+  MAC_UPDATER_BUNDLE="$(find "$ARTIFACT_ROOT/macos" -maxdepth 1 -type f -name '*.app.tar.gz' | head -n 1 || true)"
+  MAC_UPDATER_SIG="$(find "$ARTIFACT_ROOT/macos" -maxdepth 1 -type f -name '*.app.tar.gz.sig' | head -n 1 || true)"
+
+  if [[ -z "$MAC_UPDATER_BUNDLE" || -z "$MAC_UPDATER_SIG" ]]; then
+    echo "Local macOS updater artifacts were not produced." >&2
+    echo "Expected files under $ARTIFACT_ROOT/macos" >&2
+    exit 1
+  fi
+
+  echo "Local updater bundle: $MAC_UPDATER_BUNDLE"
+  echo "Local updater signature: $MAC_UPDATER_SIG"
+elif [[ "$REQUIRE_LOCAL_SIGNING" == "1" ]]; then
+  echo "No local updater signing key found at $DEFAULT_KEY_PATH and TAURI_SIGNING_PRIVATE_KEY is unset." >&2
   exit 1
+else
+  echo "No local updater signing key found at $DEFAULT_KEY_PATH; skipping local signed bundle build."
+  echo "GitHub Actions signing will use repo secrets."
 fi
 
-echo "Local updater bundle: $MAC_UPDATER_BUNDLE"
-echo "Local updater signature: $MAC_UPDATER_SIG"
 echo "Preflight passed."
